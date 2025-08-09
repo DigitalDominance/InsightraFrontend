@@ -21,6 +21,17 @@ export const CATEGORICAL_FACTORY_ADDRESS =
 export const SCALAR_FACTORY_ADDRESS =
   process.env.NEXT_PUBLIC_SCALAR_FACTORY as `0x${string}` | undefined;
 
+// Default values for user-submitted market parameters.  These values can be
+// provided in your `.env.local` to remove the need for users to enter
+// contract addresses on the create page.  If undefined, the create page
+// will prompt the user to configure them first.
+export const DEFAULT_COLLATERAL =
+  process.env.NEXT_PUBLIC_DEFAULT_COLLATERAL as `0x${string}` | undefined;
+export const DEFAULT_ORACLE =
+  process.env.NEXT_PUBLIC_DEFAULT_ORACLE as `0x${string}` | undefined;
+export const DEFAULT_QUESTION_ID =
+  process.env.NEXT_PUBLIC_DEFAULT_QUESTION_ID as `0x${string}` | undefined;
+
 // (Optional) the bond token used to pay creation fees; can be undefined if
 // your frontend infers it from the factory.
 export const BOND_TOKEN_ADDRESS =

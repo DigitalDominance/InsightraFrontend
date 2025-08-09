@@ -21,8 +21,9 @@ export default function Navigation() {
   return (
     <nav className="sticky top-0 z-50 p-4">
       <div
-        className="flex items-center justify-between py-4 px-6 rounded-xl shadow-2xl backdrop-blur-xl border border-gray-800/50"
+        className="flex items-center justify-between py-4 px-6 rounded-xl shadow-2xl backdrop-blur-xl"
         style={{
+          // Remove the border around the nav container so the logo has no visible outline
           background: "rgba(0, 0, 0, 0.65)",
           backdropFilter: "blur(16px)",
           boxShadow: `
@@ -35,12 +36,10 @@ export default function Navigation() {
         <div className="flex items-center space-x-6">
           {/* Logo */}
           <a href="/" className="flex items-center space-x-3">
-            {/* Replace the placeholder monogram with the actual project logo.  The
-             * image is stored in the public folder so Next.js will serve
-             * `/insightra-logo.webp` automatically.  Width and height are
-             * constrained to match the previous square wrapper and preserve
-             * the spacing. */}
-            <div className="w-10 h-10 rounded-lg flex items-center justify-center border border-[#49EACB]/30 overflow-hidden">
+            {/* Display the Insightra logo without an outline and at a larger size.  The
+             * surrounding wrapper uses no border and grows slightly to make the
+             * logo more prominent in the navbar. */}
+            <div className="w-14 h-14 flex items-center justify-center overflow-hidden">
               <img
                 src="/insightra-logo.webp"
                 alt="Insightra logo"
@@ -80,8 +79,9 @@ export default function Navigation() {
           )}
 
           <ConnectButton.Custom>
-            {({ account, chain, openConnectModal, mounted }) => {
-              const connected = mounted && account && chain
+            {({ account, chain, openConnectModal, openAccountModal, mounted }) => {
+              const connected = mounted && account && chain;
+              // When not connected, prompt user to connect their wallet
               if (!connected) {
                 return (
                   <OutlineButton size="md" onClick={openConnectModal}>
@@ -90,18 +90,19 @@ export default function Navigation() {
                       <span className="hidden md:inline">CONNECT WALLET</span>
                     </span>
                   </OutlineButton>
-                )
+                );
               }
+              // When connected, show the user's address only and open the account modal on click.
               return (
-                <OutlineButton size="md" onClick={openConnectModal}>
+                <OutlineButton size="md" onClick={openAccountModal}>
                   <span className="font-cyber">
-                    <span className="md:hidden">{account.displayName}</span>
-                    <span className="hidden md:inline">
-                      {account.displayName} • {chain.hasIcon ? chain.name : "Network"}
-                    </span>
+                    {/* Always display only the truncated address (0x1234…abcd) and avoid showing network names */}
+                    {account?.address
+                      ? `${account.address.slice(0, 6)}…${account.address.slice(-4)}`
+                      : account.displayName}
                   </span>
                 </OutlineButton>
-              )
+              );
             }}
           </ConnectButton.Custom>
         </div>

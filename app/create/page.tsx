@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { useAccount, useReadContract, useWriteContract } from "wagmi";
 import { config } from "@/lib/wagmi";
-import { FACTORIES, BOND_TOKEN_ADDRESS } from "@/lib/contracts";
+import { FACTORIES, DEFAULT_COLLATERAL, DEFAULT_ORACLE, DEFAULT_QUESTION_ID } from "@/lib/contracts";
 import {
   ERC20_ABI,
   FACTORY_BASE_ABI,
@@ -32,9 +32,9 @@ export default function CreatePage() {
   // decimals will appear.
   const [marketType, setMarketType] = useState<'binary' | 'categorical' | 'scalar'>('binary');
   const [marketName, setMarketName] = useState('');
-  const [collateral, setCollateral] = useState('');
-  const [oracle, setOracle] = useState('');
-  const [questionId, setQuestionId] = useState('');
+  // Default parameters are pulled from environment variables via
+  // DEFAULT_COLLATERAL, DEFAULT_ORACLE and DEFAULT_QUESTION_ID.  Users
+  // creating a market do not need to supply these fields on the frontend.
   // Categorical specific
   const [numOutcomes, setNumOutcomes] = useState(3);
   const [outcomeNames, setOutcomeNames] = useState('');
@@ -85,8 +85,13 @@ export default function CreatePage() {
       toast({ title: 'Loading...', description: 'Please wait for factory configuration to load.' });
       return;
     }
-    if (!collateral || !oracle || !questionId || !marketName) {
-      toast({ title: 'Missing fields', description: 'Please fill all required fields.' });
+    // Check that defaults exist
+    if (!DEFAULT_COLLATERAL || !DEFAULT_ORACLE || !DEFAULT_QUESTION_ID) {
+      toast({ title: 'Missing defaults', description: 'Default collateral, oracle or questionId not configured. Please set NEXT_PUBLIC_DEFAULT_COLLATERAL, NEXT_PUBLIC_DEFAULT_ORACLE and NEXT_PUBLIC_DEFAULT_QUESTION_ID in your environment.' });
+      return;
+    }
+    if (!marketName) {
+      toast({ title: 'Missing name', description: 'Please provide a market name.' });
       return;
     }
     // Approve the creation fee on the bond token
@@ -115,9 +120,9 @@ export default function CreatePage() {
           abi: BINARY_FACTORY_ABI,
           functionName: 'submitBinary',
           args: [
-            collateral as `0x${string}`,
-            oracle as `0x${string}`,
-            questionId as `0x${string}`,
+            DEFAULT_COLLATERAL as `0x${string}`,
+            DEFAULT_ORACLE as `0x${string}`,
+            DEFAULT_QUESTION_ID as `0x${string}`,
             marketName,
           ],
         }) as `0x${string}`;
@@ -137,9 +142,9 @@ export default function CreatePage() {
           abi: CATEGORICAL_FACTORY_ABI,
           functionName: 'submitCategorical',
           args: [
-            collateral as `0x${string}`,
-            oracle as `0x${string}`,
-            questionId as `0x${string}`,
+            DEFAULT_COLLATERAL as `0x${string}`,
+            DEFAULT_ORACLE as `0x${string}`,
+            DEFAULT_QUESTION_ID as `0x${string}`,
             marketName,
             count,
             namesArray,
@@ -159,9 +164,9 @@ export default function CreatePage() {
           abi: SCALAR_FACTORY_ABI,
           functionName: 'submitScalar',
           args: [
-            collateral as `0x${string}`,
-            oracle as `0x${string}`,
-            questionId as `0x${string}`,
+            DEFAULT_COLLATERAL as `0x${string}`,
+            DEFAULT_ORACLE as `0x${string}`,
+            DEFAULT_QUESTION_ID as `0x${string}`,
             marketName,
             minInt,
             maxInt,
@@ -230,7 +235,7 @@ export default function CreatePage() {
         <h1 className="text-4xl md:text-5xl font-bold bg-gradient-to-r from-[#49EACB] to-[#7C3AED] bg-clip-text text-transparent">
           Create Prediction Market
         </h1>
-        <p className="text-gray-400 text-lg">Pay the creation fee and deploy a new Binary or Categorical market</p>
+        <p className="text-gray-400 text-lg">Pay the creation fee and deploy a new Binary, Categorical or Scalar market</p>
       </div>
 
       <GlassCard>
@@ -258,36 +263,7 @@ export default function CreatePage() {
               className="flex-1 bg-neutral-900/60 backdrop-blur-md border border-gray-700 rounded-lg px-3 py-2 text-white"
             />
           </div>
-          {/* Collateral token */}
-          <div className="flex flex-col md:flex-row md:items-center gap-4">
-            <label className="w-40 font-medium">Collateral Token</label>
-            <input
-              value={collateral}
-              onChange={(e) => setCollateral(e.target.value)}
-              placeholder="0x... ERC20 address"
-              className="flex-1 bg-neutral-900/60 backdrop-blur-md border border-gray-700 rounded-lg px-3 py-2 text-white"
-            />
-          </div>
-          {/* Oracle address */}
-          <div className="flex flex-col md:flex-row md:items-center gap-4">
-            <label className="w-40 font-medium">Oracle Address</label>
-            <input
-              value={oracle}
-              onChange={(e) => setOracle(e.target.value)}
-              placeholder="0x... KasOracle"
-              className="flex-1 bg-neutral-900/60 backdrop-blur-md border border-gray-700 rounded-lg px-3 py-2 text-white"
-            />
-          </div>
-          {/* Question ID */}
-          <div className="flex flex-col md:flex-row md:items-center gap-4">
-            <label className="w-40 font-medium">Question ID</label>
-            <input
-              value={questionId}
-              onChange={(e) => setQuestionId(e.target.value)}
-              placeholder="0x... bytes32 id"
-              className="flex-1 bg-neutral-900/60 backdrop-blur-md border border-gray-700 rounded-lg px-3 py-2 text-white"
-            />
-          </div>
+          {/* Default parameters (collateral, oracle and questionId) are configured in the environment and are not exposed to end users. */}
           {/* Categorical fields */}
           {marketType === 'categorical' && (
             <>
