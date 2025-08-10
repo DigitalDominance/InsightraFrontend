@@ -185,3 +185,61 @@ export const SCALAR_MARKET_ABI = [
   { type: 'event', name: 'Redeemed', inputs: [ { indexed: true, name: 'user', type: 'address' }, { indexed: false, name: 'collateralOut', type: 'uint256' }, { indexed: false, name: 'meta', type: 'bytes' } ] },
   { type: 'event', name: 'Cancelled', inputs: [ { indexed: true, name: 'questionId', type: 'bytes32' } ] },
 ] as const;
+
+
+// Minimal KasOracle ABI needed for question creation flow
+export const KAS_ORACLE_ABI = [
+  // views
+  { type: 'function', name: 'questionFee', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint256' }] },
+  { type: 'function', name: 'bondToken', stateMutability: 'view', inputs: [], outputs: [{ type: 'address' }] },
+  // public create (returns id)
+  {
+    type: 'function',
+    name: 'createQuestionPublic',
+    stateMutability: 'nonpayable',
+    inputs: [
+      {
+        type: 'tuple',
+        name: 'p',
+        components: [
+          { type: 'uint8',  name: 'qtype' },
+          { type: 'uint32', name: 'options' },
+          { type: 'int256', name: 'scalarMin' },
+          { type: 'int256', name: 'scalarMax' },
+          { type: 'uint32', name: 'scalarDecimals' },
+          { type: 'uint32', name: 'timeout' },
+          { type: 'uint8',  name: 'bondMultiplier' },
+          { type: 'uint8',  name: 'maxRounds' },
+          { type: 'bytes32',name: 'templateHash' },
+          { type: 'string', name: 'dataSource' },
+          { type: 'address',name: 'consumer' },
+          { type: 'uint64', name: 'openingTs' }
+        ]
+      },
+      { type: 'bytes32', name: 'salt' }
+    ],
+    outputs: [{ type: 'bytes32' }]
+  },
+  // events
+  {
+    type: 'event',
+    name: 'QuestionCreated',
+    inputs: [
+      { indexed: true, name: 'id', type: 'bytes32' },
+      { indexed: false, name: 'params', type: 'tuple', components: [
+        { type: 'uint8',  name: 'qtype' },
+        { type: 'uint32', name: 'options' },
+        { type: 'int256', name: 'scalarMin' },
+        { type: 'int256', name: 'scalarMax' },
+        { type: 'uint32', name: 'scalarDecimals' },
+        { type: 'uint32', name: 'timeout' },
+        { type: 'uint8',  name: 'bondMultiplier' },
+        { type: 'uint8',  name: 'maxRounds' },
+        { type: 'bytes32',name: 'templateHash' },
+        { type: 'string', name: 'dataSource' },
+        { type: 'address',name: 'consumer' },
+        { type: 'uint64', name: 'openingTs' }
+      ] }
+    ]
+  }
+] as const;

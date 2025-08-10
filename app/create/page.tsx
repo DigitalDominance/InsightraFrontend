@@ -10,8 +10,8 @@ import {
   BINARY_FACTORY_ABI,
   CATEGORICAL_FACTORY_ABI,
   SCALAR_FACTORY_ABI,
-} from "@/lib/abis";
-import { decodeEventLog } from "viem";
+  KAS_ORACLE_ABI } from "@/lib/abis";
+import { decodeEventLog, keccak256, toHex } from "viem";
 import GlassCard from "@/components/ui/glass-card";
 import { OutlineButton, OutlineField } from "@/components/ui/gradient-outline";
 import { useToast } from "@/hooks/use-toast";
@@ -72,7 +72,72 @@ export default function CreatePage() {
 
   const { writeContractAsync } = useWriteContract();
 
-  async function handleCreate() {
+  
+  // Helper to build QuestionParams for the oracle based on UI selections
+  function buildQuestionParams(): any {
+    const now = Math.floor(Date.now() / 1000);
+    // Oracle constraints: timeout [5m..7d], openingTs >= now + 1h, <= now + 5y
+    const timeout = 24 * 60 * 60; // 24h liveness per round
+    const bondMultiplier = 2;     // conservative default
+    const maxRounds = 5;          // up to 5 rounds before arbitration
+    const template = marketName || 'Untitled';
+    const templateHash = keccak256(toHex(Buffer.from(template)));
+    const dataSource = 'user';
+    const consumer = '0x0000000000000000000000000000000000000000';
+    const openingTs = BigInt(now + 60 * 60); // 1 hour from now
+
+    if (marketType === 'binary') {
+      return {
+        qtype: 0,
+        options: 2,
+        scalarMin: 0n,
+        scalarMax: 0n,
+        scalarDecimals: 0,
+        timeout,
+        bondMultiplier,
+        maxRounds,
+        templateHash,
+        dataSource,
+        consumer,
+        openingTs,
+      };
+    } else if (marketType === 'categorical') {
+      const count = Number(numOutcomes);
+      return {
+        qtype: 1,
+        options: count,
+        scalarMin: 0n,
+        scalarMax: 0n,
+        scalarDecimals: 0,
+        timeout,
+        bondMultiplier,
+        maxRounds,
+        templateHash,
+        dataSource,
+        consumer,
+        openingTs,
+      };
+    } else {
+      const dec = Number(scalarDecimals || '18');
+      const minInt = BigInt(scalarMin || '0');
+      const maxInt = BigInt(scalarMax || '0');
+      return {
+        qtype: 2,
+        options: 0,
+        scalarMin: minInt,
+        scalarMax: maxInt,
+        scalarDecimals: dec,
+        timeout,
+        bondMultiplier,
+        maxRounds,
+        templateHash,
+        dataSource,
+        consumer,
+        openingTs,
+      };
+    }
+  }
+async function handleCreate() {
     if (!isConnected) {
       toast({ title: 'Connect Wallet', description: 'Please connect your wallet before creating a market.' });
       return;
@@ -86,7 +151,7 @@ export default function CreatePage() {
       return;
     }
     // Check that defaults exist
-    if (!DEFAULT_COLLATERAL || !DEFAULT_ORACLE || !DEFAULT_QUESTION_ID) {
+    if (!DEFAULT_COLLATERAL || !DEFAULT_ORACLE) {
       toast({ title: 'Missing defaults', description: 'Default collateral, oracle or questionId not configured. Please set NEXT_PUBLIC_DEFAULT_COLLATERAL, NEXT_PUBLIC_DEFAULT_ORACLE and NEXT_PUBLIC_DEFAULT_QUESTION_ID in your environment.' });
       return;
     }
@@ -111,8 +176,86 @@ export default function CreatePage() {
       return;
     }
 
+    
+    // === Oracle path: createQuestionPublic ===
+    // Read question fee and bond token from oracle
+    const [qFee, qBondToken] = await Promise.all([
+      config.publicClient.readContract({
+        address: DEFAULT_ORACLE as `0x${string}`,
+        abi: KAS_ORACLE_ABI,
+        functionName: 'questionFee',
+        args: [],
+      }),
+      config.publicClient.readContract({
+        address: DEFAULT_ORACLE as `0x${string}`,
+        abi: KAS_ORACLE_ABI,
+        functionName: 'bondToken',
+        args: [],
+      }),
+    ]) as [bigint, `0x${string}`];
+
+    // Approve fee to oracle
+    if (qFee > 0n) {
+      try {
+        const approveTx = await writeContractAsync({
+          address: qBondToken,
+          abi: ERC20_ABI,
+          functionName: 'approve',
+          args: [DEFAULT_ORACLE as `0x${string}`, qFee],
+        });
+        setTxHash(approveTx as `0x${string}`);
+        await config.publicClient.waitForTransactionReceipt({ hash: approveTx as `0x${string}` });
+        toast({ title: 'Approval confirmed', description: 'Question fee approved, creating question...' });
+      } catch (err: any) {
+        toast({ title: 'Approval failed', description: err?.shortMessage || err?.message || 'Failed to approve oracle fee.' });
+        return;
+      }
+    }
+
+    // Build params and call createQuestionPublic
+    const params = buildQuestionParams();
+    // Salt for uniqueness
+    const salt = keccak256(toHex(Buffer.from(String(Date.now()) + (address || '0x0'))));
+    let questionId: `0x${string}` | undefined;
+    try {
+      const createHash = await writeContractAsync({
+        address: DEFAULT_ORACLE as `0x${string}`,
+        abi: KAS_ORACLE_ABI,
+        functionName: 'createQuestionPublic',
+        args: [params, salt],
+      });
+      setTxHash(createHash as `0x${string}`);
+      const receipt = await config.publicClient.waitForTransactionReceipt({ hash: createHash as `0x${string}` });
+      // Try to parse QuestionCreated to get id
+      for (const log of receipt.logs) {
+        try {
+          const parsed = decodeEventLog({
+            abi: KAS_ORACLE_ABI,
+            data: log.data,
+            topics: log.topics,
+          });
+          if (parsed.eventName === 'QuestionCreated') {
+            questionId = parsed.args?.id as `0x${string}`;
+            break;
+          }
+        } catch {}
+      }
+    } catch (err: any) {
+      toast({ title: 'Oracle create failed', description: err?.shortMessage || err?.message || 'Failed to create oracle question.' });
+      return;
+    }
+    if (!questionId) {
+      toast({ title: 'Missing questionId', description: 'Could not derive questionId from oracle receipt.' });
+      return;
+    }
+
+    // === Factory submit using the new questionId ===
     // Prepare arguments based on market type
     let submitHash: `0x${string}` | undefined;
+    try {
+      if (marketType === 'binary') {
+        submitHash = await writeContractAsync({
+    : `0x${string}` | undefined;
     try {
       if (marketType === 'binary') {
         submitHash = await writeContractAsync({
@@ -122,7 +265,7 @@ export default function CreatePage() {
           args: [
             DEFAULT_COLLATERAL as `0x${string}`,
             DEFAULT_ORACLE as `0x${string}`,
-            DEFAULT_QUESTION_ID as `0x${string}`,
+            questionId as `0x${string}`,
             marketName,
           ],
         }) as `0x${string}`;
@@ -144,7 +287,7 @@ export default function CreatePage() {
           args: [
             DEFAULT_COLLATERAL as `0x${string}`,
             DEFAULT_ORACLE as `0x${string}`,
-            DEFAULT_QUESTION_ID as `0x${string}`,
+            questionId as `0x${string}`,
             marketName,
             count,
             namesArray,
@@ -166,7 +309,7 @@ export default function CreatePage() {
           args: [
             DEFAULT_COLLATERAL as `0x${string}`,
             DEFAULT_ORACLE as `0x${string}`,
-            DEFAULT_QUESTION_ID as `0x${string}`,
+            questionId as `0x${string}`,
             marketName,
             minInt,
             maxInt,
