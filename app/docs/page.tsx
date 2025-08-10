@@ -5,7 +5,6 @@ import Link from "next/link";
 import { BookOpen, Workflow, Code2, ShieldCheck, GitBranch, ChevronRight } from "lucide-react";
 import GlassCard from "@/components/ui/glass-card";
 
-/** Smooth scroll + active section highlight (no HTML comments anywhere) */
 function useScrollSpy(ids: string[], offset = 80) {
   const [active, setActive] = useState<string>(ids[0] || "");
   useEffect(() => {
@@ -71,7 +70,10 @@ export default function DocsPage() {
 
   return (
     <div className="relative">
-      <div className="pointer-events-none absolute inset-0 [background:radial-gradient(1000px_600px_at_70%_-20%,rgba(124,58,237,0.25),transparent),radial-gradient(800px_500px_at_20%_0%,rgba(73,234,203,0.15),transparent)]" />
+      {/* soft gradient background */}
+      <div className="pointer-events-none absolute inset-0" style={{
+        background: "radial-gradient(1000px 600px at 70% -20%, rgba(124,58,237,0.25), transparent), radial-gradient(800px 500px at 20% 0%, rgba(73,234,203,0.15), transparent)"
+      }} />
 
       <div className="mx-auto max-w-7xl px-4 md:px-8 py-10 md:py-16">
         <div className="grid grid-cols-1 md:grid-cols-[260px_1fr] gap-8">
@@ -104,6 +106,7 @@ export default function DocsPage() {
               </div>
             </header>
 
+            {/* OVERVIEW */}
             <GlassCard id="intro">
               <div className="p-6 md:p-8 space-y-4">
                 <div className="flex items-center gap-2 text-[#49EACB]">
@@ -116,6 +119,7 @@ export default function DocsPage() {
               </div>
             </GlassCard>
 
+            {/* CONTRACTS & ARCHITECTURE */}
             <GlassCard id="contracts">
               <div className="p-6 md:p-8 space-y-6">
                 <div className="flex items-center gap-2 text-[#49EACB]">
@@ -125,64 +129,57 @@ export default function DocsPage() {
                   <li><b>Factories</b>: <code>BinaryFactory</code>, <code>CategoricalFactory</code>, <code>ScalarFactory</code> deploy markets and manage listing controls.</li>
                   <li><b>Markets</b>: <code>BinaryMarket</code>, <code>CategoricalMarket</code>, <code>ScalarMarket</code> (via <code>MarketBase</code>) mint outcome tokens, take liquidity, and settle from oracle results.</li>
                   <li><b>Oracle</b>: <code>KasOracle</code> (Predikt) exposes commit–reveal with escalating bonds and optional arbitration for final rulings.</li>
-                  <li><b>Arbitrator</b>: <code>SimpleArbitrator</code> provides a deterministic onchain “court” when disputes escalate.</li>
+                  <li><b>Arbitrator</b>: <code>SimpleArbitrator</code> provides a deterministic onchain court when disputes escalate.</li>
                 </ul>
 
+                {/* Simple architecture diagram */}
                 <div className="bg-white/5 rounded-xl p-4">
-                  <svg viewBox="0 0 1000 420" className="w-full h-auto">
+                  <svg viewBox="0 0 980 360" className="w-full h-auto">
                     <defs>
-                      <linearGradient id="g1" x1="0" x2="1">
+                      <linearGradient id="lg" x1="0" x2="1">
                         <stop offset="0%" stopColor="#49EACB" />
                         <stop offset="100%" stopColor="#7C3AED" />
                       </linearGradient>
-                      <marker id="arrow" markerWidth="12" markerHeight="12" refX="6" refY="6" orient="auto">
-                        <path d="M2,2 L10,6 L2,10 z" fill="url(#g1)" />
+                      <marker id="m" markerWidth="10" markerHeight="10" refX="6" refY="5" orient="auto">
+                        <path d="M2,2 L8,5 L2,8 z" fill="url(#lg)" />
                       </marker>
-                      <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
-                        <feDropShadow dx="0" dy="2" stdDeviation="3" floodColor="black" floodOpacity="0.6"/>
-                      </filter>
                     </defs>
-                    <rect x="10" y="10" width="980" height="400" rx="16" fill="url(#g1)" opacity="0.07"/>
+                    <rect x="10" y="10" width="960" height="340" rx="16" fill="url(#lg)" opacity="0.07"/>
                     <g fontFamily="ui-sans-serif, system-ui" fontSize="14" fill="#d1d5db">
-                      <rect x="40" y="60" width="160" height="70" rx="12" fill="#0b0f14" stroke="url(#g1)" filter="url(#shadow)"/>
-                      <text x="120" y="100" textAnchor="middle" fill="#fff">User (dApp)</text>
+                      <rect x="40" y="60" width="160" height="60" rx="10" fill="#0b0f14" stroke="url(#lg)"/>
+                      <text x="120" y="95" textAnchor="middle" fill="#fff">User (dApp)</text>
 
-                      <rect x="380" y="40" width="240" height="90" rx="12" fill="#0b0f14" stroke="url(#g1)" filter="url(#shadow)"/>
-                      <text x="500" y="75" textAnchor="middle" fill="#fff">Predikt Oracle</text>
-                      <text x="500" y="93" textAnchor="middle">createQuestionPublic / commit / reveal / finalize</text>
+                      <rect x="360" y="40" width="240" height="80" rx="10" fill="#0b0f14" stroke="url(#lg)"/>
+                      <text x="480" y="75" textAnchor="middle" fill="#fff">Predikt Oracle</text>
 
-                      <rect x="360" y="180" width="280" height="90" rx="12" fill="#0b0f14" stroke="url(#g1)" filter="url(#shadow)"/>
-                      <text x="500" y="215" textAnchor="middle" fill="#fff">Factories</text>
-                      <text x="500" y="233" textAnchor="middle">Binary / Categorical / Scalar</text>
+                      <rect x="340" y="170" width="280" height="80" rx="10" fill="#0b0f14" stroke="url(#lg)"/>
+                      <text x="480" y="210" textAnchor="middle" fill="#fff">Factories</text>
 
-                      <rect x="760" y="180" width="200" height="120" rx="12" fill="#0b0f14" stroke="url(#g1)" filter="url(#shadow)"/>
-                      <text x="860" y="215" textAnchor="middle" fill="#fff">Market</text>
-                      <text x="860" y="233" textAnchor="middle">Trade, LP, Redeem</text>
-                      <text x="860" y="251" textAnchor="middle">finalizeFromOracle()</text>
+                      <rect x="740" y="170" width="200" height="110" rx="10" fill="#0b0f14" stroke="url(#lg)"/>
+                      <text x="840" y="210" textAnchor="middle" fill="#fff">Market</text>
+                      <text x="840" y="230" textAnchor="middle">finalizeFromOracle()</text>
 
-                      <rect x="760" y="40" width="200" height="90" rx="12" fill="#0b0f14" stroke="url(#g1)" filter="url(#shadow)"/>
-                      <text x="860" y="75" textAnchor="middle" fill="#fff">SimpleArbitrator</text>
+                      <rect x="740" y="40" width="200" height="80" rx="10" fill="#0b0f14" stroke="url(#lg)"/>
+                      <text x="840" y="75" textAnchor="middle" fill="#fff">SimpleArbitrator</text>
 
-                      <line x1="200" y1="95" x2="380" y2="85" stroke="url(#g1)" strokeWidth="2.5" markerEnd="url(#arrow)"/>
-                      <text x="290" y="78" textAnchor="middle">createQuestionPublic (fee)</text>
+                      <line x1="200" y1="90" x2="360" y2="80" stroke="url(#lg)" strokeWidth="2.5" markerEnd="url(#m)"/>
+                      <text x="280" y="74" textAnchor="middle">createQuestionPublic (fee)</text>
 
-                      <line x1="500" y1="130" x2="500" y2="180" stroke="url(#g1)" strokeWidth="2.5" markerEnd="url(#arrow)"/>
-                      <text x="540" y="158">submit*</text>
+                      <line x1="480" y1="120" x2="480" y2="170" stroke="url(#lg)" strokeWidth="2.5" markerEnd="url(#m)"/>
+                      <text x="520" y="150">submit*</text>
 
-                      <line x1="640" y1="225" x2="760" y2="225" stroke="url(#g1)" strokeWidth="2.5" markerEnd="url(#arrow)"/>
-                      <text x="700" y="210" textAnchor="middle">market deployed</text>
+                      <line x1="620" y1="210" x2="740" y2="210" stroke="url(#lg)" strokeWidth="2.5" markerEnd="url(#m)"/>
+                      <text x="680" y="195" textAnchor="middle">market deployed</text>
 
-                      <line x1="860" y1="180" x2="860" y2="130" stroke="url(#g1)" strokeWidth="2.5" markerEnd="url(#arrow)"/>
-                      <text x="895" y="155">escalate</text>
-
-                      <line x1="760" y1="260" x2="640" y2="260" stroke="url(#g1)" strokeWidth="2.5" markerEnd="url(#arrow)"/>
-                      <text x="700" y="278" textAnchor="middle">finalizeFromOracle</text>
+                      <line x1="840" y1="170" x2="840" y2="120" stroke="url(#lg)" strokeWidth="2.5" markerEnd="url(#m)"/>
+                      <text x="875" y="145">escalate</text>
                     </g>
                   </svg>
                 </div>
               </div>
             </GlassCard>
 
+            {/* MARKET LIFECYCLE */}
             <GlassCard id="market-lifecycle">
               <div className="p-6 md:p-8 space-y-4">
                 <div className="flex items-center gap-2 text-[#49EACB]">
@@ -196,49 +193,54 @@ export default function DocsPage() {
                   <li><b>Dispute</b>: If challenged repeatedly up to <code>maxRounds</code>, the question is sent to <code>SimpleArbitrator</code> for a final onchain ruling.</li>
                 </ol>
 
+                {/* commit->reveal diagram */}
                 <div className="bg-white/5 rounded-xl p-4">
-                  <svg viewBox="0 0 1000 360" className="w-full h-auto">
+                  <svg viewBox="0 0 980 300" className="w-full h-auto">
                     <defs>
-                      <linearGradient id="g2" x1="0" x2="1"><stop offset="0%" stopColor="#49EACB"/><stop offset="100%" stopColor="#7C3AED"/></linearGradient>
-                      <marker id="arrow2" markerWidth="12" markerHeight="12" refX="6" refY="6" orient="auto">
-                        <path d="M2,2 L10,6 L2,10 z" fill="url(#g2)" />
+                      <linearGradient id="lg2" x1="0" x2="1">
+                        <stop offset="0%" stopColor="#49EACB" />
+                        <stop offset="100%" stopColor="#7C3AED" />
+                      </linearGradient>
+                      <marker id="m2" markerWidth="10" markerHeight="10" refX="6" refY="5" orient="auto">
+                        <path d="M2,2 L8,5 L2,8 z" fill="url(#lg2)" />
                       </marker>
                     </defs>
                     <g fontFamily="ui-sans-serif, system-ui" fontSize="14" fill="#d1d5db">
-                      <rect x="40" y="60" width="180" height="70" rx="10" fill="#0b0f14" stroke="url(#g2)"/>
-                      <text x="130" y="98" textAnchor="middle" fill="#fff">commit(hash)</text>
+                      <rect x="40" y="50" width="180" height="60" rx="10" fill="#0b0f14" stroke="url(#lg2)"/>
+                      <text x="130" y="85" textAnchor="middle" fill="#fff">commit(hash)</text>
 
-                      <rect x="280" y="60" width="180" height="70" rx="10" fill="#0b0f14" stroke="url(#g2)"/>
-                      <text x="370" y="98" textAnchor="middle" fill="#fff">reveal(answer)</text>
+                      <rect x="280" y="50" width="180" height="60" rx="10" fill="#0b0f14" stroke="url(#lg2)"/>
+                      <text x="370" y="85" textAnchor="middle" fill="#fff">reveal(answer)</text>
 
-                      <rect x="520" y="60" width="180" height="70" rx="10" fill="#0b0f14" stroke="url(#g2)"/>
-                      <text x="610" y="98" textAnchor="middle" fill="#fff">liveness countdown</text>
+                      <rect x="520" y="50" width="180" height="60" rx="10" fill="#0b0f14" stroke="url(#lg2)"/>
+                      <text x="610" y="85" textAnchor="middle" fill="#fff">liveness</text>
 
-                      <rect x="760" y="60" width="180" height="70" rx="10" fill="#0b0f14" stroke="url(#g2)"/>
-                      <text x="850" y="98" textAnchor="middle" fill="#fff">finalize()</text>
+                      <rect x="760" y="50" width="180" height="60" rx="10" fill="#0b0f14" stroke="url(#lg2)"/>
+                      <text x="850" y="85" textAnchor="middle" fill="#fff">finalize()</text>
 
-                      <line x1="220" y1="95" x2="280" y2="95" stroke="url(#g2)" strokeWidth="2.5" markerEnd="url(#arrow2)"/>
-                      <line x1="460" y1="95" x2="520" y2="95" stroke="url(#g2)" strokeWidth="2.5" markerEnd="url(#arrow2)"/>
-                      <line x1="700" y1="95" x2="760" y2="95" stroke="url(#g2)" strokeWidth="2.5" markerEnd="url(#arrow2)"/>
+                      <line x1="220" y1="80" x2="280" y2="80" stroke="url(#lg2)" strokeWidth="2.5" markerEnd="url(#m2)"/>
+                      <line x1="460" y1="80" x2="520" y2="80" stroke="url(#lg2)" strokeWidth="2.5" markerEnd="url(#m2)"/>
+                      <line x1="700" y1="80" x2="760" y2="80" stroke="url(#lg2)" strokeWidth="2.5" markerEnd="url(#m2)"/>
 
-                      <rect x="520" y="200" width="180" height="70" rx="10" fill="#0b0f14" stroke="url(#g2)"/>
-                      <text x="610" y="238" textAnchor="middle" fill="#fff">challenge & escalate</text>
-                      <line x1="610" y1="130" x2="610" y2="200" stroke="url(#g2)" strokeWidth="2.5" markerEnd="url(#arrow2)"/>
-                      <line x1="610" y1="270" x2="850" y2="270" stroke="url(#g2)" strokeWidth="2.5" markerEnd="url(#arrow2)"/>
-                      <text x="730" y="258">arbitrator ruling → finalize</text>
+                      <rect x="520" y="180" width="180" height="60" rx="10" fill="#0b0f14" stroke="url(#lg2)"/>
+                      <text x="610" y="215" textAnchor="middle" fill="#fff">challenge & escalate</text>
+                      <line x1="610" y1="110" x2="610" y2="180" stroke="url(#lg2)" strokeWidth="2.5" markerEnd="url(#m2)"/>
+                      <line x1="610" y1="240" x2="850" y2="240" stroke="url(#lg2)" strokeWidth="2.5" markerEnd="url(#m2)"/>
+                      <text x="730" y="228">arbitrator ruling → finalize</text>
                     </g>
                   </svg>
                 </div>
               </div>
             </GlassCard>
 
+            {/* ORACLE */}
             <GlassCard id="oracle">
               <div className="p-6 md:p-8 space-y-4">
                 <div className="flex items-center gap-2 text-[#49EACB]">
                   <ShieldCheck className="w-5 h-5" /> <span className="font-semibold">Predikt Oracle</span>
                 </div>
                 <p className="text-gray-300">
-                  Predikt (<code>KasOracle</code>) is an optimistic oracle with commit–reveal and bond escalation.
+                  Predikt (KasOracle) is an optimistic oracle with commit–reveal and bond escalation.
                 </p>
                 <div className="text-gray-300 space-y-2">
                   <p><b>Question params</b>:</p>
@@ -248,12 +250,13 @@ export default function DocsPage() {
                     <li><code>templateHash</code>, <code>dataSource</code>, <code>consumer</code>, <code>openingTs</code></li>
                   </ul>
                   <p><b>Commit</b>: <code>hashCommit = keccak256(abi.encode(id, encodedOutcome, salt, msg.sender))</code>.</p>
-                  <p><b>Reveal</b>: Provide <code>encodedOutcome</code>, <code>salt</code>, and a <b>bond</b> ≥ <code>minBaseBond</code> or previous best × <code>bondMultiplier</code>.</p>
+                  <p><b>Reveal</b>: Provide <code>encodedOutcome</code>, <code>salt</code>, and a bond ≥ <code>minBaseBond</code> or previous best × <code>bondMultiplier</code>.</p>
                   <p><b>Finalize</b>: After liveness with no successful escalation, <code>finalize(id)</code> pays winner from the bond pool minus <code>feeBps</code> to <code>feeSink</code>.</p>
                 </div>
               </div>
             </GlassCard>
 
+            {/* FEES */}
             <GlassCard id="fees">
               <div className="p-6 md:p-8 space-y-4">
                 <div className="flex items-center gap-2 text-[#49EACB]">
@@ -267,6 +270,7 @@ export default function DocsPage() {
               </div>
             </GlassCard>
 
+            {/* UMA COMPARISON */}
             <GlassCard id="uma-compare">
               <div className="p-6 md:p-8 space-y-4">
                 <div className="flex items-center gap-2 text-[#49EACB]">
@@ -280,6 +284,7 @@ export default function DocsPage() {
               </div>
             </GlassCard>
 
+            {/* DEV REFS */}
             <GlassCard id="dev">
               <div className="p-6 md:p-8 space-y-4">
                 <div className="flex items-center gap-2 text-[#49EACB]">
@@ -302,6 +307,7 @@ function finalizeFromOracle(); // pulls oracle result and settles
               </div>
             </GlassCard>
 
+            {/* FAQ */}
             <GlassCard id="faq">
               <div className="p-6 md:p-8 space-y-3">
                 <div className="flex items-center gap-2 text-[#49EACB]">
