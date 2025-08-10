@@ -1247,7 +1247,7 @@ export default function AdminPage() {
               </div>
             )}
 
-            {arbType === "categorical" and (
+            {arbType === "categorical" && (
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-center">
                 <label className="text-sm text-gray-300">Winner Index (uint)</label>
                 <input
