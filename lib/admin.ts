@@ -1,5 +1,5 @@
 // Admin address - only this address has admin access
-export const ADMIN_ADDRESS = '0xA0c5048c32870bB66d0BE861643cD6Bb5F66Ada2';
+export const ADMIN_ADDRESS = '0xD031272E734F2B38515F2F55F2F935d3227b739d';
 
 export function isAdmin(address: string | undefined): boolean {
   if (!address) return false;
