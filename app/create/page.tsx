@@ -1,34 +1,46 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { useAccount, useReadContract, useWriteContract } from "wagmi";
+import { useEffect, useMemo, useState } from "react";
+import Image from "next/image";
+import { useAccount, useWriteContract } from "wagmi";
 import { config } from "@/lib/wagmi";
-import { FACTORIES, DEFAULT_COLLATERAL, DEFAULT_ORACLE, DEFAULT_QUESTION_ID } from "@/lib/contracts";
+import { FACTORIES, DEFAULT_COLLATERAL, DEFAULT_ORACLE } from "@/lib/contracts";
 import {
   ERC20_ABI,
-  FACTORY_BASE_ABI,
   BINARY_FACTORY_ABI,
   CATEGORICAL_FACTORY_ABI,
   SCALAR_FACTORY_ABI,
-  KAS_ORACLE_ABI } from "@/lib/abis";
+  KAS_ORACLE_ABI,
+} from "@/lib/abis";
 import { decodeEventLog, keccak256, toHex } from "viem";
-import Image from "next/image";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+
 import GlassCard from "@/components/ui/glass-card";
-import { OutlineButton, OutlineField } from "@/components/ui/gradient-outline";
+import { OutlineButton } from "@/components/ui/gradient-outline";
 import { useToast } from "@/hooks/use-toast";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
 
-/**
- * Page allowing any user to create a new prediction market.  Users must pay
- * the flat creation fee (100 bond tokens) by approving the factory to spend
- * their BOND_TOKEN, then calling the appropriate `submit*` function on the
- * factory.  The market address is parsed from the emitted event once the
- * transaction is mined.
- */
+type Hex = `0x${string}`;
 
-function TooltipLabel({ label, tip }: { label: string; tip: string }) {
+function TooltipLabel(props: { label: string; tip: string }) {
+  const { label, tip } = props;
   return (
     <div className="flex items-center gap-2">
       <span className="text-sm text-white/90">{label}</span>
@@ -37,367 +49,267 @@ function TooltipLabel({ label, tip }: { label: string; tip: string }) {
           <TooltipTrigger asChild>
             <span className="cursor-help text-white/70 hover:text-white">ⓘ</span>
           </TooltipTrigger>
-          <TooltipContent className="max-w-[320px] bg-neutral-900/85 text-white/90 backdrop-blur-xl rounded-xl border p-4 shadow-2xl"
+          <TooltipContent
+            className="max-w-[320px] bg-neutral-900/85 text-white/90 backdrop-blur-xl rounded-xl border p-4 shadow-2xl"
             side="top"
             sideOffset={8}
-            style={{ borderImage: 'linear-gradient(135deg, #0fa, #49EACB) 1' }}>
-            <div className="text-xs leading-relaxed">
-              {tip}
-            </div>
+            style={{ borderImage: "linear-gradient(135deg, #0fa, #7C3AED) 1" }}
+          >
+            <div className="text-xs leading-relaxed">{tip}</div>
           </TooltipContent>
         </Tooltip>
       </TooltipProvider>
     </div>
-  )
+  );
 }
+
 export default function CreatePage() {
   const { address, isConnected } = useAccount();
   const { toast } = useToast();
-  // Form fields
-  // The user can choose between binary, categorical or scalar markets.  When
-  // 'scalar' is selected, additional fields for the numeric range and
-  // decimals will appear.
-  const [marketType, setMarketType] = useState<'binary' | 'categorical' | 'scalar'>('binary');
-  const [marketName, setMarketName] = useState('');
-  // Default parameters are pulled from environment variables via
-  // DEFAULT_COLLATERAL, DEFAULT_ORACLE and DEFAULT_QUESTION_ID.  Users
-  // creating a market do not need to supply these fields on the frontend.
-  // Categorical specific
-  const [numOutcomes, setNumOutcomes] = useState(3);
-  const [outcomeNames, setOutcomeNames] = useState('');
-  // Scalar specific
-  const [scalarMin, setScalarMin] = useState('');
-  const [scalarMax, setScalarMax] = useState('');
-  const [scalarDecimals, setScalarDecimals] = useState('18');
-  // Created market address
-  const [createdMarket, setCreatedMarket] = useState<`0x${string}` | undefined>();
-  const [txHash, setTxHash] = useState<`0x${string}` | undefined>();
-
-  // Determine the selected factory address from env; the key lookup is based on
-  // the market type.  Categorical and scalar markets are optional so
-  // undefined factories will be gracefully handled.
-  const selectedFactory = FACTORIES[marketType];
-
-  // Read creationFee and bondToken from the factory.  We only read the
-  // immutable configuration here; these values do not change per user.
-  const { data: creationFee } = useReadContract({
-    address: selectedFactory,
-    abi: FACTORY_BASE_ABI,
-    functionName: 'creationFee',
-    query: {
-      enabled: !!selectedFactory,
-    },
-  });
-  const { data: factoryBondToken } = useReadContract({
-    address: selectedFactory,
-    abi: FACTORY_BASE_ABI,
-    functionName: 'bondToken',
-    query: {
-      enabled: !!selectedFactory,
-    },
-  });
-
   const { writeContractAsync } = useWriteContract();
 
-  
-  // Helper to build QuestionParams for the oracle based on UI selections
-  function buildQuestionParams(): any {
-    const now = Math.floor(Date.now() / 1000);
-    // Oracle constraints: timeout [5m..7d], openingTs >= now + 1h, <= now + 5y
-    const timeout = 24 * 60 * 60; // 24h liveness per round
-    const bondMultiplier = 2;     // conservative default
-    const maxRounds = 5;          // up to 5 rounds before arbitration
-    const template = marketName || 'Untitled';
-    const templateHash = keccak256(toHex(template));
-    const dataSource = 'user';
-    const consumer = '0x0000000000000000000000000000000000000000';
-    const openingTs = BigInt(now + 60 * 60); // 1 hour from now
+  // Form state
+  const [marketType, setMarketType] = useState<'binary' | 'categorical' | 'scalar'>('binary');
+  const [marketName, setMarketName] = useState<string>("");
+  const [numOutcomes, setNumOutcomes] = useState<number>(3);
+  const [outcomeNames, setOutcomeNames] = useState<string>("A,B,C");
+  const [scalarMin, setScalarMin] = useState<string>("0");
+  const [scalarMax, setScalarMax] = useState<string>("100");
+  const [scalarDecimals, setScalarDecimals] = useState<number>(2);
 
-    if (marketType === 'binary') {
-      return {
-        qtype: 0,
-        options: 2,
-        scalarMin: 0n,
-        scalarMax: 0n,
-        scalarDecimals: 0,
-        timeout,
-        bondMultiplier,
-        maxRounds,
-        templateHash,
-        dataSource,
-        consumer,
-        openingTs,
-      };
-    } else if (marketType === 'categorical') {
-      const count = Number(numOutcomes);
-      return {
-        qtype: 1,
-        options: count,
-        scalarMin: 0n,
-        scalarMax: 0n,
-        scalarDecimals: 0,
-        timeout,
-        bondMultiplier,
-        maxRounds,
-        templateHash,
-        dataSource,
-        consumer,
-        openingTs,
-      };
-    } else {
-      const dec = Number(scalarDecimals || '18');
-      const minInt = BigInt(scalarMin || '0');
-      const maxInt = BigInt(scalarMax || '0');
-      return {
-        qtype: 2,
-        options: 0,
-        scalarMin: minInt,
-        scalarMax: maxInt,
-        scalarDecimals: dec,
-        timeout,
-        bondMultiplier,
-        maxRounds,
-        templateHash,
-        dataSource,
-        consumer,
-        openingTs,
-      };
-    }
+  const selectedFactory: Hex | undefined = useMemo(() => {
+    if (!FACTORIES) return undefined as any;
+    if (marketType === 'binary') return FACTORIES.binary as Hex;
+    if (marketType === 'categorical') return FACTORIES.categorical as Hex;
+    return FACTORIES.scalar as Hex;
+  }, [marketType]);
+
+  // UI: early guard
+  if (!DEFAULT_ORACLE || !DEFAULT_COLLATERAL) {
+    return (
+      <div className="flex items-center justify-center min-h-[60vh]">
+        <GlassCard className="p-6 text-center">
+          <h2 className="text-2xl font-bold mb-2">Configuration Missing</h2>
+          <p className="text-sm text-white/70">
+            Please set NEXT_PUBLIC_DEFAULT_ORACLE and NEXT_PUBLIC_DEFAULT_COLLATERAL.
+          </p>
+        </GlassCard>
+      </div>
+    );
   }
-async function handleCreate() {
-    if (!isConnected) {
-      toast({ title: 'Connect Wallet', description: 'Please connect your wallet before creating a market.' });
+
+  async function handleCreate() {
+    if (!isConnected || !address) {
+      toast({ title: "Connect wallet", description: "Please connect your wallet to continue." });
       return;
     }
     if (!selectedFactory) {
-      toast({ title: 'Factory not configured', description: 'Factory address missing in environment.' });
+      toast({ title: "Missing factory", description: "No factory for selected market type." });
       return;
     }
-    if (!creationFee || !factoryBondToken) {
-      toast({ title: 'Loading...', description: 'Please wait for factory configuration to load.' });
-      return;
-    }
-    // Check that defaults exist
-    if (!DEFAULT_COLLATERAL || !DEFAULT_ORACLE) {
-      toast({ title: 'Missing defaults', description: 'Default collateral, oracle or questionId not configured. Please set NEXT_PUBLIC_DEFAULT_COLLATERAL, NEXT_PUBLIC_DEFAULT_ORACLE and NEXT_PUBLIC_DEFAULT_QUESTION_ID in your environment.' });
-      return;
-    }
-    if (!marketName) {
-      toast({ title: 'Missing name', description: 'Please provide a market name.' });
-      return;
-    }
-    // Approve the creation fee on the bond token
+
     try {
-      toast({ title: 'Approving fee', description: 'Sending approval transaction...' });
-      const approveTx = await writeContractAsync({
-        address: factoryBondToken as `0x${string}`,
-        abi: ERC20_ABI,
-        functionName: 'approve',
-        args: [selectedFactory as `0x${string}`, creationFee as bigint],
-      });
-      setTxHash(approveTx as `0x${string}`);
-      await config.publicClient.waitForTransactionReceipt({ hash: approveTx as `0x${string}` });
-      toast({ title: 'Approval confirmed', description: 'Creation fee approved, creating market...' });
-    } catch (err: any) {
-      toast({ title: 'Approval failed', description: err?.shortMessage || err?.message || 'Failed to approve fee.' });
-      return;
-    }
+      // 1) Read questionFee and bondToken from Oracle
+      const [qFee, qBondToken] = await Promise.all([
+        config.publicClient.readContract({
+          address: DEFAULT_ORACLE as Hex,
+          abi: KAS_ORACLE_ABI,
+          functionName: 'questionFee',
+          args: [],
+        }),
+        config.publicClient.readContract({
+          address: DEFAULT_ORACLE as Hex,
+          abi: KAS_ORACLE_ABI,
+          functionName: 'bondToken',
+          args: [],
+        }),
+      ]) as [bigint, Hex];
 
-    
-    // === Oracle path: createQuestionPublic ===
-    // Read question fee and bond token from oracle
-    const [qFee, qBondToken] = await Promise.all([
-      config.publicClient.readContract({
-        address: DEFAULT_ORACLE as `0x${string}`,
-        abi: KAS_ORACLE_ABI,
-        functionName: 'questionFee',
-        args: [],
-      }),
-      config.publicClient.readContract({
-        address: DEFAULT_ORACLE as `0x${string}`,
-        abi: KAS_ORACLE_ABI,
-        functionName: 'bondToken',
-        args: [],
-      }),
-    ]) as [bigint, `0x${string}`];
-
-    // Approve fee to oracle
-    if (qFee > 0n) {
-      try {
-        const approveTx = await writeContractAsync({
+      // 2) Approve Oracle to pull the fee
+      if (qFee > 0n) {
+        const approveHash = await writeContractAsync({
           address: qBondToken,
           abi: ERC20_ABI,
           functionName: 'approve',
-          args: [DEFAULT_ORACLE as `0x${string}`, qFee],
-        });
-        setTxHash(approveTx as `0x${string}`);
-        await config.publicClient.waitForTransactionReceipt({ hash: approveTx as `0x${string}` });
-        toast({ title: 'Approval confirmed', description: 'Question fee approved, creating question...' });
-      } catch (err: any) {
-        toast({ title: 'Approval failed', description: err?.shortMessage || err?.message || 'Failed to approve oracle fee.' });
-        return;
+          args: [DEFAULT_ORACLE as Hex, qFee],
+        }) as Hex;
+        await config.publicClient.waitForTransactionReceipt({ hash: approveHash });
       }
-    }
 
-    // Build params and call createQuestionPublic
-    const params = buildQuestionParams();
-    // Salt for uniqueness
-    const salt = keccak256(toHex(String(Date.now()) + (address || '0x0')));
-    let questionId: `0x${string}` | undefined;
-    try {
-      const createHash = await writeContractAsync({
-        address: DEFAULT_ORACLE as `0x${string}`,
+      // 3) Build QuestionParams for the Oracle
+      const now = Math.floor(Date.now() / 1000);
+      const template = marketName || 'Untitled';
+      const templateHash = keccak256(toHex(template));
+      const timeout = 24 * 60 * 60; // 24h liveness
+      const bondMultiplier = 2;
+      const maxRounds = 5;
+      const openingTs = BigInt(now + 60 * 60); // +1h
+
+      const params: any =
+        marketType === 'binary'
+          ? {
+              qtype: 0,
+              options: 2,
+              scalarMin: 0n,
+              scalarMax: 0n,
+              scalarDecimals: 0,
+              timeout,
+              bondMultiplier,
+              maxRounds,
+              templateHash,
+              dataSource: 'user',
+              consumer: '0x0000000000000000000000000000000000000000',
+              openingTs,
+            }
+          : marketType === 'categorical'
+          ? {
+              qtype: 1,
+              options: Number(numOutcomes),
+              scalarMin: 0n,
+              scalarMax: 0n,
+              scalarDecimals: 0,
+              timeout,
+              bondMultiplier,
+              maxRounds,
+              templateHash,
+              dataSource: 'user',
+              consumer: '0x0000000000000000000000000000000000000000',
+              openingTs,
+            }
+          : {
+              qtype: 2,
+              options: 0,
+              scalarMin: BigInt(scalarMin || '0'),
+              scalarMax: BigInt(scalarMax || '0'),
+              scalarDecimals: Number(scalarDecimals || 0),
+              timeout,
+              bondMultiplier,
+              maxRounds,
+              templateHash,
+              dataSource: 'user',
+              consumer: '0x0000000000000000000000000000000000000000',
+              openingTs,
+            };
+
+      const salt = keccak256(toHex(String(Date.now()) + address));
+
+      // 4) createQuestionPublic
+      const qHash = await writeContractAsync({
+        address: DEFAULT_ORACLE as Hex,
         abi: KAS_ORACLE_ABI,
         functionName: 'createQuestionPublic',
         args: [params, salt],
-      });
-      setTxHash(createHash as `0x${string}`);
-      const receipt = await config.publicClient.waitForTransactionReceipt({ hash: createHash as `0x${string}` });
-      // Try to parse QuestionCreated to get id
-      for (const log of receipt.logs) {
+      }) as Hex;
+      const qReceipt = await config.publicClient.waitForTransactionReceipt({ hash: qHash });
+
+      // 5) extract questionId from QuestionCreated
+      let questionId: Hex | undefined = undefined;
+      for (const log of qReceipt.logs) {
         try {
-          const parsed = decodeEventLog({
-            abi: KAS_ORACLE_ABI,
-            data: log.data,
-            topics: log.topics,
+          const parsed: any = decodeEventLog({
+            abi: KAS_ORACLE_ABI as any,
+            data: log.data as Hex,
+            topics: log.topics as readonly Hex[],
           });
           if (parsed.eventName === 'QuestionCreated') {
-            questionId = parsed.args?.id as `0x${string}`;
+            questionId = parsed.args?.id as Hex;
             break;
           }
         } catch {}
       }
-    } catch (err: any) {
-      toast({ title: 'Oracle create failed', description: err?.shortMessage || err?.message || 'Failed to create oracle question.' });
-      return;
-    }
-    if (!questionId) {
-      toast({ title: 'Missing questionId', description: 'Could not derive questionId from oracle receipt.' });
-      return;
-    }
+      if (!questionId) {
+        toast({ title: 'Oracle error', description: 'Could not obtain questionId from events.' });
+        return;
+      }
 
-    // === Factory submit using the new questionId ===
-    // Prepare arguments based on market type
-    let submitHash: `0x${string}` | undefined;
-    try {
+      // 6) submit* on factory with the new questionId
+      let submitHash: Hex | undefined = undefined;
       if (marketType === 'binary') {
         submitHash = await writeContractAsync({
-          address: selectedFactory as `0x${string}`,
+          address: selectedFactory,
           abi: BINARY_FACTORY_ABI,
           functionName: 'submitBinary',
-          args: [
-            DEFAULT_COLLATERAL as `0x${string}`,
-            DEFAULT_ORACLE as `0x${string}`,
-            questionId as `0x${string}`,
-            marketName,
-          ],
-        }) as `0x${string}`;
+          args: [DEFAULT_COLLATERAL as Hex, DEFAULT_ORACLE as Hex, questionId, marketName],
+        }) as Hex;
       } else if (marketType === 'categorical') {
-        // categorical
         const count = Number(numOutcomes);
-        const namesArray = outcomeNames
-          .split(',')
-          .map((n) => n.trim())
-          .filter((n) => n.length > 0);
+        const namesArray = outcomeNames.split(',').map(s => s.trim()).filter(Boolean);
         if (namesArray.length !== count) {
-          toast({ title: 'Outcomes mismatch', description: `Number of outcome names (${namesArray.length}) does not match outcome count (${count}).` });
+          toast({ title: 'Input mismatch', description: 'Outcome names must match the number of outcomes.' });
           return;
         }
         submitHash = await writeContractAsync({
-          address: selectedFactory as `0x${string}`,
+          address: selectedFactory,
           abi: CATEGORICAL_FACTORY_ABI,
           functionName: 'submitCategorical',
-          args: [
-            DEFAULT_COLLATERAL as `0x${string}`,
-            DEFAULT_ORACLE as `0x${string}`,
-            questionId as `0x${string}`,
-            marketName,
-            count,
-            namesArray,
-          ],
-        }) as `0x${string}`;
+          args: [DEFAULT_COLLATERAL as Hex, DEFAULT_ORACLE as Hex, questionId, marketName, count, namesArray],
+        }) as Hex;
       } else {
-        // scalar
-        if (!scalarMin || !scalarMax) {
-          toast({ title: 'Missing fields', description: 'Please provide min and max values for scalar market.' });
-          return;
-        }
-        const minInt = BigInt(scalarMin);
-        const maxInt = BigInt(scalarMax);
-        const dec = Number(scalarDecimals) || 0;
         submitHash = await writeContractAsync({
-          address: selectedFactory as `0x${string}`,
+          address: selectedFactory,
           abi: SCALAR_FACTORY_ABI,
           functionName: 'submitScalar',
           args: [
-            DEFAULT_COLLATERAL as `0x${string}`,
-            DEFAULT_ORACLE as `0x${string}`,
-            questionId as `0x${string}`,
+            DEFAULT_COLLATERAL as Hex,
+            DEFAULT_ORACLE as Hex,
+            questionId,
             marketName,
-            minInt,
-            maxInt,
-            dec,
+            BigInt(scalarMin || '0'),
+            BigInt(scalarMax || '0'),
+            Number(scalarDecimals || 0),
           ],
-        }) as `0x${string}`;
+        }) as Hex;
       }
-      if (!submitHash) return;
-      setTxHash(submitHash);
-      // Wait for the transaction to mine
       const receipt = await config.publicClient.waitForTransactionReceipt({ hash: submitHash });
-      // Decode the emitted event to discover the deployed market address
-      let newMarket: `0x${string}` | undefined;
-      let abi;
-      let eventName;
-      if (marketType === 'binary') {
-        abi = BINARY_FACTORY_ABI;
-        eventName = 'BinaryCreated';
-      } else if (marketType === 'categorical') {
-        abi = CATEGORICAL_FACTORY_ABI;
-        eventName = 'CategoricalCreated';
-      } else {
-        abi = SCALAR_FACTORY_ABI;
-        eventName = 'ScalarCreated';
-      }
+
+      // 7) Parse created market address from corresponding event
+      let marketAddr: Hex | undefined = undefined;
+      const abi = marketType === 'binary' ? BINARY_FACTORY_ABI
+                : marketType === 'categorical' ? CATEGORICAL_FACTORY_ABI
+                : SCALAR_FACTORY_ABI;
+      const eventName = marketType === 'binary' ? 'BinaryCreated'
+                      : marketType === 'categorical' ? 'CategoricalCreated'
+                      : 'ScalarCreated';
+
       for (const log of receipt.logs) {
         try {
-          const parsed = decodeEventLog({ abi, data: log.data as `0x${string}`, topics: log.topics as readonly `0x${string}`[] });
+          const parsed: any = decodeEventLog({
+            abi: abi as any,
+            data: log.data as Hex,
+            topics: log.topics as readonly Hex[],
+          });
           if (parsed?.eventName === eventName) {
-            // @ts-ignore
-            newMarket = parsed.args.market as `0x${string}`;
+            marketAddr = parsed.args.market as Hex;
             break;
           }
-        } catch (_err) {
-          // ignore decoding errors from unrelated logs
-        }
+        } catch {}
       }
-      if (newMarket) {
-        setCreatedMarket(newMarket);
-        toast({ title: 'Market created', description: `Deployed at ${newMarket}` });
+
+      if (marketAddr) {
+        toast({ title: 'Market created', description: `Deployed at ${marketAddr}` });
       } else {
-        toast({ title: 'Market created', description: 'Transaction confirmed. Unable to parse market address; please check explorer.' });
+        toast({ title: 'Market created', description: 'Market deployed but address not parsed. Check explorer.' });
       }
     } catch (err: any) {
-      toast({ title: 'Creation failed', description: err?.shortMessage || err?.message || 'Market creation failed.' });
+      toast({ title: 'Create failed', description: err?.shortMessage || err?.message || 'Unknown error' });
     }
   }
 
-  // Display the human‑readable creation fee; assume 18 decimals when decimals are unknown
-  const creationFeeFormatted = creationFee ? (Number(creationFee) / 1e18).toString() : '...';
-
+  // --- UI ---
   if (!isConnected) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
-        <GlassCard className="text-center">
+        <GlassCard className="text-center p-6">
           <h2 className="text-2xl font-bold mb-4">Connect Your Wallet</h2>
           <p className="text-gray-400">Please connect your wallet to create a market.</p>
         </GlassCard>
       </div>
     );
   }
-;
+
   return (
     <div className="space-y-8">
-      
+      {/* Quick explainer */}
       <GlassCard className="p-6">
         <h2 className="text-xl font-semibold mb-2">Market Types — quick guide</h2>
         <Accordion type="single" collapsible>
@@ -425,135 +337,132 @@ async function handleCreate() {
         </Accordion>
       </GlassCard>
 
-      <div className="text-center space-y-4">
-        <h1 className="text-4xl md:text-5xl font-bold bg-gradientt-to-r from-[#49EACB] to-[#7C3AED] bg-clip-text text-transparent">
-          Create Prediction Market
-        </h1>
-        <p className="text-gray-400 text-lg">Pay the creation fee and deploy a new Binary, Categorical or Scalar market</p>
-      </div>
+      {/* Form */}
+      <GlassCard className="p-6 space-y-6">
+        <div className="text-center space-y-2">
+          <h1 className="text-4xl md:text-5xl font-bold bg-gradient-to-r from-[#49EACB] to-[#7C3AED] bg-clip-text text-transparent">
+            Create Prediction Market
+          </h1>
+          <p className="text-gray-400 text-sm">Pay the creation fee and deploy a Binary, Categorical, or Scalar market.</p>
+        </div>
 
-      <GlassCard>
-        <div className="space-y-4">
-          {/* Market type selection */}
-          <div className="flex flex-col md:flex-row md:items-center gap-4">
-            <div className="w-40">
-              <TooltipLabel
-                label="Market Type"
-                tip="Binary = Yes/No. Categorical = two or more named outcomes. Scalar = numeric result within a range."
-              />
-            </div>
-            <div className="flex-1">
-              <Select
-                value={marketType}
-                onValueChange={(v) => setMarketType(v as 'binary' | 'categorical' | 'scalar')}
-              >
-                <SelectTrigger className="w-full bg-neutral-900/60 backdrop-blur-md border border-gray-700 rounded-lg text-white">
-                  <SelectValue placeholder="Choose type" />
-                </SelectTrigger>
-                <SelectContent className="bg-black/80 backdrop-blur-xl border border-white/10 text-white">
-                  <SelectItem value="binary">Binary (Yes/No)</SelectItem>
-                  <SelectItem value="categorical">Categorical (2+)</SelectItem>
-                  <SelectItem value="scalar">Scalar (range)</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
+        {/* Fee pill */}
+        <div className="flex justify-end">
+          <div className="inline-flex items-center gap-2 px-3 py-2 text-white bg-neutral-900/60 border border-white/10 rounded-full">
+            <Image src="/wkas.png" alt="WKAS" width={18} height={18} className="rounded-full ring-1 ring-white/20" />
+            <span className="font-semibold">100 WKAS</span>
           </div>
-</div>
-          {/* Market name */}
-          <div className="flex flex-col md:flex-row md:items-center gap-4">
-            <label className="w-40 font-medium">Market Name</label>
-            <input
-              value={marketName}
-              onChange={(e) => setMarketName(e.target.value)}
-              placeholder="e.g. Will BTC > $100k by 2026?"
-              className="flex-1 bg-neutral-900/60 backdrop-blur-md border border-gray-700 rounded-lg px-3 py-2 text-white"
+        </div>
+
+        {/* Market type */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-center">
+          <div>
+            <TooltipLabel
+              label="Market Type"
+              tip="Binary = Yes/No. Categorical = two or more named outcomes. Scalar = numeric result within a range."
             />
           </div>
-          {/* Default parameters (collateral, oracle and questionId) are configured in the environment and are not exposed to end users. */}
-          {/* Categorical fields */}
-          {marketType === 'categorical' && (
-            <>
-              <div className="flex flex-col md:flex-row md:items-center gap-4">
-                <label className="w-40 font-medium"># Outcomes</label>
-                <input
-                  type="number"
-                  min={2}
-                  value={numOutcomes}
-                  onChange={(e) => setNumOutcomes(parseInt(e.target.value) || 0)}
-                  className="flex-1 bg-neutral-900/60 backdrop-blur-md border border-gray-700 rounded-lg px-3 py-2 text-white"
-                />
-              </div>
-              <div className="flex flex-col md:flex-row md:items-center gap-4">
-                <label className="w-40 font-medium">Outcome Names</label>
-                <input
-                  value={outcomeNames}
-                  onChange={(e) => setOutcomeNames(e.target.value)}
-                  placeholder="Comma‑separated, e.g. Win,Lose,Draw"
-                  className="flex-1 bg-neutral-900/60 backdrop-blur-md border border-gray-700 rounded-lg px-3 py-2 text-white"
-                />
-              </div>
-            </>
-          )}
-        {/* Scalar fields */}
-        {marketType === 'scalar' && (
+          <div className="md:col-span-2">
+            <Select value={marketType} onValueChange={(v) => setMarketType(v as any)}>
+              <SelectTrigger className="w-full bg-neutral-900/60 backdrop-blur-md border border-gray-700 rounded-lg text-white">
+                <SelectValue placeholder="Choose type" />
+              </SelectTrigger>
+              <SelectContent className="bg-black/80 backdrop-blur-xl border border-white/10 text-white">
+                <SelectItem value="binary">Binary (Yes/No)</SelectItem>
+                <SelectItem value="categorical">Categorical (2+)</SelectItem>
+                <SelectItem value="scalar">Scalar (range)</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+
+        {/* Market name */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-center">
+          <div>
+            <TooltipLabel
+              label="Market Name"
+              tip="A short human-friendly title. Included in the oracle template hash."
+            />
+          </div>
+          <input
+            value={marketName}
+            onChange={(e) => setMarketName(e.target.value)}
+            placeholder="e.g., Will BTC close above $90k on Dec 31?"
+            className="md:col-span-2 bg-neutral-900/60 backdrop-blur-md border border-gray-700 rounded-lg px-3 py-2 text-white outline-none"
+          />
+        </div>
+
+        {/* Categorical fields */}
+        {marketType === 'categorical' && (
           <>
-            <div className="flex flex-col md:flex-row md:items-center gap-4">
-              <label className="w-40 font-medium">Min Value</label>
-              <input
-                value={scalarMin}
-                onChange={(e) => setScalarMin(e.target.value)}
-                placeholder="Minimum"
-                className="flex-1 bg-neutral-900/60 backdrop-blur-md border border-gray-700 rounded-lg px-3 py-2 text-white"
-              />
-            </div>
-            <div className="flex flex-col md:flex-row md:items-center gap-4">
-              <label className="w-40 font-medium">Max Value</label>
-              <input
-                value={scalarMax}
-                onChange={(e) => setScalarMax(e.target.value)}
-                placeholder="Maximum"
-                className="flex-1 bg-neutral-900/60 backdrop-blur-md border border-gray-700 rounded-lg px-3 py-2 text-white"
-              />
-            </div>
-            <div className="flex flex-col md:flex-row md:items-center gap-4">
-              <label className="w-40 font-medium">Decimals</label>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-center">
+              <div>
+                <TooltipLabel
+                  label="# of Outcomes"
+                  tip="Total number of outcome tokens to create for this market."
+                />
+              </div>
               <input
                 type="number"
-                min={0}
-                value={scalarDecimals}
-                onChange={(e) => setScalarDecimals(e.target.value)}
-                className="flex-1 bg-neutral-900/60 backdrop-blur-md border border-gray-700 rounded-lg px-3 py-2 text-white"
+                min={2}
+                value={numOutcomes}
+                onChange={(e) => setNumOutcomes(parseInt(e.target.value || '2', 10))}
+                className="md:col-span-2 bg-neutral-900/60 backdrop-blur-md border border-gray-700 rounded-lg px-3 py-2 text-white outline-none"
+              />
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-center">
+              <div>
+                <TooltipLabel
+                  label="Outcome Names"
+                  tip="Comma‑separated list. Count must match the number of outcomes."
+                />
+              </div>
+              <input
+                value={outcomeNames}
+                onChange={(e) => setOutcomeNames(e.target.value)}
+                placeholder="e.g., Yes,No (or A,B,C)"
+                className="md:col-span-2 bg-neutral-900/60 backdrop-blur-md border border-gray-700 rounded-lg px-3 py-2 text-white outline-none"
               />
             </div>
           </>
         )}
-          {/* Creation fee display */}
-          <div className="flex flex-col md:flex-row md:items-center gap-4">
-            <label className="w-40 font-medium">Creation Fee</label>
-            <div className="flex-1 px-3 py-2 text-white bg-neutral-900/60 border border-gray-700 rounded-lg">
-              <div className="flex items-center gap-2">
-                  <Image src="/wkas.png" alt="WKAS" width={18} height={18} className="rounded-full ring-1 ring-white/20" />
-                  <span className="font-semibold">100 WKAS</span>
-                </div>
-                <div className="text-[11px] text-white/50">Paid to the Oracle to publish your question</div>
+
+        {/* Scalar fields */}
+        {marketType === 'scalar' && (
+          <>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-center">
+              <div><TooltipLabel label="Min" tip="Lowest possible numeric value." /></div>
+              <input
+                value={scalarMin}
+                onChange={(e) => setScalarMin(e.target.value)}
+                className="md:col-span-2 bg-neutral-900/60 backdrop-blur-md border border-gray-700 rounded-lg px-3 py-2 text-white outline-none"
+              />
             </div>
-          </div>
-          {/* Action buttons */}
-          <div className="flex justify-end pt-4">
-            <OutlineButton onClick={handleCreate} disabled={!isConnected || !selectedFactory}>
-              <span className="font-cyber">Create Market</span>
-            </OutlineButton>
-          </div>
-          {createdMarket && (
-            <div className="mt-4 text-sm text-green-400 break-all">
-              New market deployed at: {createdMarket}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-center">
+              <div><TooltipLabel label="Max" tip="Highest possible numeric value." /></div>
+              <input
+                value={scalarMax}
+                onChange={(e) => setScalarMax(e.target.value)}
+                className="md:col-span-2 bg-neutral-900/60 backdrop-blur-md border border-gray-700 rounded-lg px-3 py-2 text-white outline-none"
+              />
             </div>
-          )}
-          {txHash && (
-            <div className="mt-2 text-xs text-gray-500 break-all">
-              Last tx hash: {txHash}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-center">
+              <div><TooltipLabel label="Decimals" tip="How many decimals the scalar uses (e.g., 18)." /></div>
+              <input
+                type="number"
+                min={0}
+                value={scalarDecimals}
+                onChange={(e) => setScalarDecimals(parseInt(e.target.value || '0', 10))}
+                className="md:col-span-2 bg-neutral-900/60 backdrop-blur-md border border-gray-700 rounded-lg px-3 py-2 text-white outline-none"
+              />
             </div>
-          )}
+          </>
+        )}
+
+        <div className="flex justify-end pt-2">
+          <OutlineButton onClick={handleCreate}>
+            <span className="font-cyber">Create Market</span>
+          </OutlineButton>
         </div>
       </GlassCard>
     </div>
