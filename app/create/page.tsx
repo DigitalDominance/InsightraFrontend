@@ -14,6 +14,9 @@ import {
 } from "@/lib/abis";
 import { decodeEventLog, keccak256, toHex, type Hex } from "viem";
 
+// ✅ use wagmi core actions (v2) instead of config.publicClient
+import { readContract, waitForTransactionReceipt } from "@wagmi/core";
+
 import GlassCard from "@/components/ui/glass-card";
 import { OutlineButton } from "@/components/ui/gradient-outline";
 import { useToast } from "@/hooks/use-toast";
@@ -85,19 +88,17 @@ export default function CreatePage() {
     return FACTORIES.scalar as Hex;
   }, [marketType]);
 
-  // Config sanity (render-time)
   if (!DEFAULT_ORACLE || !DEFAULT_COLLATERAL) {
     return (
       <div className="max-w-3xl mx-auto">
         <GlassCard className="text-center">
           <h2 className="text-2xl font-bold mb-2">Configuration Missing</h2>
-          <p className="text-sm text-white/70">
-            Please set <code>NEXT_PUBLIC_DEFAULT_ORACLE</code> and <code>NEXT_PUBLIC_DEFAULT_COLLATERAL</code>.
-          </p>
         </GlassCard>
       </div>
     );
   }
+
+  const normalizeHash = (h: any): Hex => (typeof h === "string" ? h : (h?.hash as Hex));
 
   async function handleCreate() {
     if (submitting) return;
@@ -119,100 +120,78 @@ export default function CreatePage() {
         return;
       }
 
-      // 1) Read oracle fee & bond token
+      // 1) Read oracle fee & bond token  ✅ via wagmi core actions
       const [qFee, qBondToken] = await Promise.all([
-        config.publicClient.readContract({
+        readContract(config, {
           address: DEFAULT_ORACLE as Hex,
           abi: KAS_ORACLE_ABI,
-          functionName: 'questionFee',
+          functionName: "questionFee",
           args: [],
-        }),
-        config.publicClient.readContract({
+        }) as Promise<bigint>,
+        readContract(config, {
           address: DEFAULT_ORACLE as Hex,
           abi: KAS_ORACLE_ABI,
-          functionName: 'bondToken',
+          functionName: "bondToken",
           args: [],
-        }),
-      ]) as [bigint, Hex];
+        }) as Promise<Hex>,
+      ]);
 
       // 2) Approve fee to oracle (if needed)
       if (qFee > 0n) {
-        const approveHash = await writeContractAsync({
-          chainId,
+        const approveHashLike = await writeContractAsync({
           address: qBondToken,
           abi: ERC20_ABI,
-          functionName: 'approve',
+          functionName: "approve",
           args: [DEFAULT_ORACLE as Hex, qFee],
-        }) as Hex;
-        await config.publicClient.waitForTransactionReceipt({ hash: approveHash });
+        });
+        const approveHash = normalizeHash(approveHashLike);
+        await waitForTransactionReceipt(config, { hash: approveHash });
       }
 
       // 3) Build question params
       const nowSec = Math.floor(Date.now() / 1000);
-      const template = marketName || 'Untitled';
+      const template = marketName || "Untitled";
       const templateHash = keccak256(toHex(template));
       const timeout = 24 * 60 * 60;
       const bondMultiplier = 2;
       const maxRounds = 5;
       const openingTs = BigInt(nowSec + 60 * 60);
 
+      const base = {
+        timeout,
+        bondMultiplier,
+        maxRounds,
+        templateHash,
+        dataSource: "WKAS",
+        consumer: "0x0000000000000000000000000000000000000000",
+        openingTs,
+      };
+
       const params =
-        marketType === 'binary'
-          ? {
-              qtype: 0,
-              options: 2,
-              scalarMin: 0n,
-              scalarMax: 0n,
-              scalarDecimals: 0,
-              timeout,
-              bondMultiplier,
-              maxRounds,
-              templateHash,
-              dataSource: "WKAS",
-              consumer: "0x0000000000000000000000000000000000000000",
-              openingTs,
-            }
-          : marketType === 'categorical'
-          ? {
-              qtype: 1,
-              options: Number(numOutcomes),
-              scalarMin: 0n,
-              scalarMax: 0n,
-              scalarDecimals: 0,
-              timeout,
-              bondMultiplier,
-              maxRounds,
-              templateHash,
-              dataSource: "WKAS",
-              consumer: "0x0000000000000000000000000000000000000000",
-              openingTs,
-            }
+        marketType === "binary"
+          ? { qtype: 0, options: 2, scalarMin: 0n, scalarMax: 0n, scalarDecimals: 0, ...base }
+          : marketType === "categorical"
+          ? { qtype: 1, options: Number(numOutcomes), scalarMin: 0n, scalarMax: 0n, scalarDecimals: 0, ...base }
           : {
               qtype: 2,
               options: 0,
               scalarMin: BigInt(scalarMin || "0"),
               scalarMax: BigInt(scalarMax || "0"),
               scalarDecimals: Number(scalarDecimals || 0),
-              timeout,
-              bondMultiplier,
-              maxRounds,
-              templateHash,
-              dataSource: "WKAS",
-              consumer: "0x0000000000000000000000000000000000000000",
-              openingTs,
+              ...base,
             };
 
       const salt = keccak256(toHex(String(Date.now()) + address));
 
-      // 4) Create question (wallet prompt #1 or #2 depending on allowance)
-      const qHash = await writeContractAsync({
-        chainId,
+      // 4) Create question
+      const qHashLike = await writeContractAsync({
         address: DEFAULT_ORACLE as Hex,
         abi: KAS_ORACLE_ABI,
-        functionName: 'createQuestionPublic',
+        functionName: "createQuestionPublic",
         args: [params as any, salt],
-      }) as Hex;
-      const qReceipt = await config.publicClient.waitForTransactionReceipt({ hash: qHash });
+      });
+      const qHash = normalizeHash(qHashLike);
+      const qReceipt = await waitForTransactionReceipt(config, { hash: qHash });
 
       // 5) Parse QuestionCreated(id)
       let questionId: Hex | undefined = undefined;
@@ -223,47 +202,44 @@ export default function CreatePage() {
             data: log.data as Hex,
             topics: log.topics as readonly Hex[],
           }) as any;
-          if (parsed?.eventName === 'QuestionCreated') {
+          if (parsed?.eventName === "QuestionCreated") {
             questionId = parsed.args?.id as Hex;
             break;
           }
         } catch {}
       }
       if (!questionId) {
-        toast({ title: 'Oracle error', description: 'Could not obtain questionId from events.' });
+        toast({ title: "Oracle error", description: "Could not obtain questionId from events." });
         return;
       }
 
-      // 6) Submit market (wallet prompt)
-      let submitHash: Hex | undefined = undefined;
-      if (marketType === 'binary') {
-        submitHash = await writeContractAsync({
-          chainId,
+      // 6) Submit market
+      let submitHashLike: any;
+      if (marketType === "binary") {
+        submitHashLike = await writeContractAsync({
           address: selectedFactory,
           abi: BINARY_FACTORY_ABI,
-          functionName: 'submitBinary',
+          functionName: "submitBinary",
           args: [DEFAULT_COLLATERAL as Hex, DEFAULT_ORACLE as Hex, questionId, template],
-        }) as Hex;
-      } else if (marketType === 'categorical') {
+        });
+      } else if (marketType === "categorical") {
         const count = Number(numOutcomes);
-        const namesArray = outcomeNames.split(',').map((s) => s.trim()).filter(Boolean);
+        const namesArray = outcomeNames.split(",").map((s) => s.trim()).filter(Boolean);
         if (namesArray.length !== count) {
-          toast({ title: 'Input mismatch', description: 'Outcome names must match the number of outcomes.' });
+          toast({ title: "Input mismatch", description: "Outcome names must match the number of outcomes." });
           return;
         }
-        submitHash = await writeContractAsync({
-          chainId,
+        submitHashLike = await writeContractAsync({
           address: selectedFactory,
           abi: CATEGORICAL_FACTORY_ABI,
-          functionName: 'submitCategorical',
+          functionName: "submitCategorical",
           args: [DEFAULT_COLLATERAL as Hex, DEFAULT_ORACLE as Hex, questionId, template, count, namesArray],
-        }) as Hex;
+        });
       } else {
-        submitHash = await writeContractAsync({
-          chainId,
+        submitHashLike = await writeContractAsync({
           address: selectedFactory,
           abi: SCALAR_FACTORY_ABI,
-          functionName: 'submitScalar',
+          functionName: "submitScalar",
           args: [
             DEFAULT_COLLATERAL as Hex,
             DEFAULT_ORACLE as Hex,
@@ -273,19 +249,19 @@ export default function CreatePage() {
             BigInt(scalarMax || "0"),
             Number(scalarDecimals || 0),
           ],
-        }) as Hex;
+        });
       }
-      await config.publicClient.waitForTransactionReceipt({ hash: submitHash as Hex });
+      const submitHash = normalizeHash(submitHashLike);
+      await waitForTransactionReceipt(config, { hash: submitHash });
 
-      toast({ title: 'Market created', description: 'Transaction confirmed. Check your portfolio or explorer.' });
+      toast({ title: "Market created", description: "Transaction confirmed. Check your portfolio or explorer." });
     } catch (err: any) {
-      toast({ title: 'Create failed', description: err?.shortMessage || err?.message || 'Unknown error' });
+      toast({ title: "Create failed", description: err?.shortMessage || err?.message || "Unknown error" });
     } finally {
       setSubmitting(false);
     }
   }
 
-  // --- UI ---
   if (!isConnected) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
@@ -407,7 +383,7 @@ export default function CreatePage() {
           </>
         )}
 
-        {/* Footer row: fee pill on left, button on right */}
+        {/* Footer row */}
         <div className="flex items-center justify-between pt-2">
           <div className="inline-flex items-center gap-2 px-3 py-1.5 text-white bg-neutral-900/60 border border-white/10 rounded-full">
             <Image src="/wkas.png" alt="WKAS" width={18} height={18} className="rounded-full ring-1 ring-white/20" />
@@ -420,7 +396,7 @@ export default function CreatePage() {
         </div>
       </GlassCard>
 
-      {/* Quick explainer (UNDER main card) */}
+      {/* Explainer under main card */}
       <GlassCard className="p-6">
         <h2 className="text-xl font-semibold mb-3">Market Types</h2>
         <Accordion type="single" collapsible>
@@ -439,8 +415,7 @@ export default function CreatePage() {
           <AccordionItem value="scalar">
             <AccordionTrigger className="text-white/90">Scalar (Numeric range)</AccordionTrigger>
             <AccordionContent className="text-sm text-white/70">
-              The result is a number within a min–max range (e.g., price, temperature). Settlement is derived from the
-              final reported value. Ensure you set realistic <em>min</em>, <em>max</em>, and <em>decimals</em>.
+              The result is a number within a min–max range. Set realistic min, max, and decimals.
             </AccordionContent>
           </AccordionItem>
         </Accordion>
