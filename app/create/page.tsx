@@ -81,7 +81,7 @@ export default function CreatePage() {
     const bondMultiplier = 2;     // conservative default
     const maxRounds = 5;          // up to 5 rounds before arbitration
     const template = marketName || 'Untitled';
-    const templateHash = keccak256(toHex(Buffer.from(template)));
+    const templateHash = keccak256(toHex(template));
     const dataSource = 'user';
     const consumer = '0x0000000000000000000000000000000000000000';
     const openingTs = BigInt(now + 60 * 60); // 1 hour from now
@@ -215,7 +215,7 @@ async function handleCreate() {
     // Build params and call createQuestionPublic
     const params = buildQuestionParams();
     // Salt for uniqueness
-    const salt = keccak256(toHex(Buffer.from(String(Date.now()) + (address || '0x0'))));
+    const salt = keccak256(toHex(String(Date.now()) + (address || '0x0')));
     let questionId: `0x${string}` | undefined;
     try {
       const createHash = await writeContractAsync({
@@ -252,10 +252,6 @@ async function handleCreate() {
     // === Factory submit using the new questionId ===
     // Prepare arguments based on market type
     let submitHash: `0x${string}` | undefined;
-    try {
-      if (marketType === 'binary') {
-        submitHash = await writeContractAsync({
-    : `0x${string}` | undefined;
     try {
       if (marketType === 'binary') {
         submitHash = await writeContractAsync({
