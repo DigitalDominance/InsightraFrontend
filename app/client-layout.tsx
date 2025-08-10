@@ -8,6 +8,7 @@ import BackgroundPaths from '@/components/ui/background-paths';
 import Navigation from '@/components/navigation';
 import Loading from './loading';
 import '@rainbow-me/rainbowkit/styles.css';
+import { Toaster } from '@/components/ui/toaster';
 import { Suspense } from 'react';
 
 const queryClient = new QueryClient();
@@ -37,6 +38,7 @@ export default function ClientLayout({
                 {children}
               </Suspense>
             </main>
+            <Toaster />
           </div>
         </RainbowKitProvider>
       </QueryClientProvider>
