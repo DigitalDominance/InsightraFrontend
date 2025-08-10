@@ -6,14 +6,8 @@ import GlassCard from "@/components/ui/glass-card";
 import {
   Shield,
   CheckCircle,
-  XCircle,
-  Clock,
   AlertTriangle,
   Plus,
-  Calendar,
-  DollarSign,
-  Users,
-  Info,
   Ban,
   Gavel,
   Settings,
@@ -24,7 +18,6 @@ import {
   useSwitchChain,
   useWriteContract,
 } from "wagmi";
-import { isAdmin as isAdminUtil } from "@/lib/admin";
 import { FACTORIES, DEFAULT_ORACLE, DEFAULT_COLLATERAL } from "@/lib/contracts";
 import { useToast } from "@/hooks/use-toast";
 import { readContract, waitForTransactionReceipt } from "@wagmi/core";
@@ -38,13 +31,13 @@ import {
   type Hex,
 } from "viem";
 
-/** Hard-gated DAO address */
+/** Hard-gated DAO address ONLY */
 const DAO_ADDRESS = "0xD031272E734F2B38515F2F55F2F935d3227b739d".toLowerCase();
 
-/** Minimal ABIs used here. (We keep them local so this file is self-sufficient.) */
+/** Minimal ABIs used here.  Important: name tuple fields in createQuestion. */
 const ORACLE_ABI = parseAbi([
   "event QuestionCreated(bytes32 indexed id, (uint8 qtype, uint32 options, int256 scalarMin, int256 scalarMax, uint32 scalarDecimals, uint32 timeout, uint8 bondMultiplier, uint8 maxRounds, bytes32 templateHash, string dataSource, address consumer, uint64 openingTs) params)",
-  "function createQuestion((uint8,uint32,int256,int256,uint32,uint32,uint8,uint8,bytes32,string,address,uint64),bytes32) external returns (bytes32)",
+  "function createQuestion((uint8 qtype,uint32 options,int256 scalarMin,int256 scalarMax,uint32 scalarDecimals,uint32 timeout,uint8 bondMultiplier,uint8 maxRounds,bytes32 templateHash,string dataSource,address consumer,uint64 openingTs),bytes32 salt) external returns (bytes32)",
   "function finalize(bytes32 id) external",
   "function setQuestionFee(uint256) external",
   "function questionFee() view returns (uint256)",
@@ -102,27 +95,6 @@ const SIMPLE_ARBITRATOR_ABI = parseAbi([
 const normalizeHash = (h: any): Hex => (typeof h === "string" ? h : (h?.hash as Hex));
 const isHex32 = (v: string) => /^0x[0-9a-fA-F]{64}$/.test(v?.trim() || "");
 
-/** Small helper to run write on a list of (addr, abi, fn, args) until one succeeds */
-async function tryMultiWrite(
-  writeContractAsync: ReturnType<typeof useWriteContract>["writeContractAsync"],
-  calls: Array<{ address: Hex; abi: any; functionName: string; args: any[] }>
-) {
-  for (const c of calls) {
-    try {
-      const txLike = await writeContractAsync({
-        address: c.address,
-        abi: c.abi,
-        functionName: c.functionName as any,
-        args: c.args,
-      });
-      return normalizeHash(txLike);
-    } catch (e) {
-      // try next
-    }
-  }
-  throw new Error("No compatible function on provided contracts.");
-}
-
 type TabId =
   | "overview"
   | "create"
@@ -141,21 +113,16 @@ export default function AdminPage() {
 
   const [selectedTab, setSelectedTab] = useState<TabId>("overview");
 
-  // ---- Admin gate ----
+  // ---- Admin gate: STRICT to DAO_ADDRESS ----
   const userIsAdmin =
-    isConnected &&
-    !!address &&
-    (address.toLowerCase() === DAO_ADDRESS || isAdminUtil(address));
+    isConnected && !!address && address.toLowerCase() === DAO_ADDRESS;
 
-  // Redirect to connect or deny
   if (!isConnected) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
         <GlassCard className="text-center p-6">
           <h2 className="text-2xl font-bold mb-4">Connect Your Wallet</h2>
-          <p className="text-gray-400">
-            Please connect your wallet to access admin panel
-          </p>
+          <p className="text-gray-400">Please connect your wallet to access admin panel</p>
         </GlassCard>
       </div>
     );
@@ -221,7 +188,7 @@ export default function AdminPage() {
       const nowSec = Math.floor(Date.now() / 1000);
       const template = marketName || "Untitled";
       const templateHash = keccak256(toHex(template));
-      const timeout = 24 * 60 * 60;
+      const timeout = 24 * 60 * 60; // seconds
       const bondMultiplier = 2;
       const maxRounds = 5;
       const openingTs = BigInt(nowSec + 60 * 60);
@@ -236,13 +203,14 @@ export default function AdminPage() {
         openingTs,
       };
 
+      // Use BigInt for int256 fields; for binary/categorical pass 0n
       const params =
         marketType === "binary"
           ? {
               qtype: 0,
               options: 2,
-              scalarMin: 0,
-              scalarMax: 0,
+              scalarMin: 0n,
+              scalarMax: 0n,
               scalarDecimals: 0,
               ...base,
             }
@@ -250,8 +218,8 @@ export default function AdminPage() {
           ? {
               qtype: 1,
               options: Number(numOutcomes),
-              scalarMin: 0,
-              scalarMax: 0,
+              scalarMin: 0n,
+              scalarMax: 0n,
               scalarDecimals: 0,
               ...base,
             }
@@ -266,7 +234,7 @@ export default function AdminPage() {
 
       const salt = keccak256(toHex(String(Date.now()) + address));
 
-      // 1) Owner path: createQuestion (no fee)
+      // 1) Owner path: createQuestion (no fee). Named tuple means object works.
       const qHashLike = await writeContractAsync({
         address: DEFAULT_ORACLE as Hex,
         abi: ORACLE_ABI,
@@ -342,10 +310,7 @@ export default function AdminPage() {
         submitTx = normalizeHash(txLike);
       }
 
-      const submitReceipt = await waitForTransactionReceipt(config, { hash: submitTx! });
-
-      // Heuristic: first created market address may be in logs as 'address' topic/arg (not guaranteed);
-      // we won't decode here (factory may emit a custom event). Present success toast instead.
+      await waitForTransactionReceipt(config, { hash: submitTx! });
       toast({ title: "Admin Market Created", description: "Question + market deployed successfully." });
       setLastMarketAddress("(see explorer / factory events)");
     } catch (err: any) {
@@ -361,6 +326,23 @@ export default function AdminPage() {
   const [modMarket, setModMarket] = useState<string>("");
   const [modReason, setModReason] = useState<string>("");
   const [modBusy, setModBusy] = useState<boolean>(false);
+
+  async function tryMultiWrite(
+    calls: Array<{ address: Hex; abi: any; functionName: string; args: any[] }>
+  ) {
+    for (const c of calls) {
+      try {
+        const txLike = await writeContractAsync({
+          address: c.address,
+          abi: c.abi,
+          functionName: c.functionName as any,
+          args: c.args,
+        });
+        return normalizeHash(txLike);
+      } catch {}
+    }
+    throw new Error("No compatible function on provided contracts.");
+  }
 
   const handleRemoveListing = async () => {
     if (modBusy) return;
@@ -392,7 +374,7 @@ export default function AdminPage() {
         },
       ].filter(Boolean) as Array<{ address: Hex; abi: any; functionName: string; args: any[] }>;
 
-      const tx = await tryMultiWrite(writeContractAsync, calls);
+      const tx = await tryMultiWrite(calls);
       await waitForTransactionReceipt(config, { hash: tx });
       toast({ title: "Listing removed", description: "Market has been unlisted." });
     } catch (err: any) {
@@ -430,7 +412,7 @@ export default function AdminPage() {
         },
       ].filter(Boolean) as Array<{ address: Hex; abi: any; functionName: string; args: any[] }>;
 
-      const tx = await tryMultiWrite(writeContractAsync, calls);
+      const tx = await tryMultiWrite(calls);
       await waitForTransactionReceipt(config, { hash: tx });
       toast({ title: "Listing restored", description: "Market is visible again." });
     } catch (err: any) {
@@ -444,7 +426,6 @@ export default function AdminPage() {
   //  TAB: Oracle Controls
   // ########################
   const [oracleReads, setOracleReads] = useState<any>(null);
-  const [oracleBusy, setOracleBusy] = useState<boolean>(false);
 
   const refreshOracle = async () => {
     if (!DEFAULT_ORACLE) return;
@@ -477,7 +458,6 @@ export default function AdminPage() {
 
   useEffect(() => {
     refreshOracle();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [address]);
 
   const [newQuestionFee, setNewQuestionFee] = useState<string>("");
@@ -536,7 +516,6 @@ export default function AdminPage() {
   };
   useEffect(() => {
     refreshFactories();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [address]);
 
   const [binaryRedeemFee, setBinaryRedeemFee] = useState<string>("");
@@ -638,12 +617,10 @@ export default function AdminPage() {
       let encoded: Hex;
       if (arbType === "binary") {
         const val = arbBinaryValue === "yes";
-        // bytes = abi.encode(bool)
         encoded = encodeAbiParameters([{ type: "bool" }], [val]) as Hex;
       } else if (arbType === "categorical") {
         encoded = encodeAbiParameters([{ type: "uint256" }], [BigInt(arbCategoricalIndex)]) as Hex;
       } else {
-        // scalar: abi.encode(int256)
         encoded = encodeAbiParameters([{ type: "int256" }], [BigInt(arbScalarValue || "0")]) as Hex;
       }
 
@@ -991,10 +968,10 @@ export default function AdminPage() {
                       onClick={async () => {
                         try {
                           await writeOracle("setQuestionFee", [BigInt(newQuestionFee || "0")]);
-                          toast({ title: "Updated", description: "questionFee set." });
                         } catch (e: any) {
-                          toast({ title: "Failed", description: e?.shortMessage || e?.message || "Error" });
+                          return toast({ title: "Failed", description: e?.shortMessage || e?.message || "Error" });
                         }
+                        toast({ title: "Updated", description: "questionFee set." });
                       }}
                       className="px-4 py-2 bg-white/10 border border-white/20 rounded-lg text-white hover:bg-white/15"
                     >
@@ -1004,10 +981,10 @@ export default function AdminPage() {
                       onClick={async () => {
                         try {
                           await writeOracle("setFeeBps", [Number(newFeeBps || "0")]);
-                          toast({ title: "Updated", description: "feeBps set." });
                         } catch (e: any) {
-                          toast({ title: "Failed", description: e?.shortMessage || e?.message || "Error" });
+                          return toast({ title: "Failed", description: e?.shortMessage || e?.message || "Error" });
                         }
+                        toast({ title: "Updated", description: "feeBps set." });
                       }}
                       className="px-4 py-2 bg-white/10 border border-white/20 rounded-lg text-white hover:bg-white/15"
                     >
@@ -1017,10 +994,10 @@ export default function AdminPage() {
                       onClick={async () => {
                         try {
                           await writeOracle("setFeeSink", [newFeeSink as Hex]);
-                          toast({ title: "Updated", description: "feeSink set." });
                         } catch (e: any) {
-                          toast({ title: "Failed", description: e?.shortMessage || e?.message || "Error" });
+                          return toast({ title: "Failed", description: e?.shortMessage || e?.message || "Error" });
                         }
+                        toast({ title: "Updated", description: "feeSink set." });
                       }}
                       className="px-4 py-2 bg-white/10 border border-white/20 rounded-lg text-white hover:bg-white/15"
                     >
@@ -1030,10 +1007,10 @@ export default function AdminPage() {
                       onClick={async () => {
                         try {
                           await writeOracle("setArbitrator", [newArbitrator as Hex]);
-                          toast({ title: "Updated", description: "arbitrator set." });
                         } catch (e: any) {
-                          toast({ title: "Failed", description: e?.shortMessage || e?.message || "Error" });
+                          return toast({ title: "Failed", description: e?.shortMessage || e?.message || "Error" });
                         }
+                        toast({ title: "Updated", description: "arbitrator set." });
                       }}
                       className="px-4 py-2 bg-white/10 border border-white/20 rounded-lg text-white hover:bg-white/15"
                     >
@@ -1043,10 +1020,10 @@ export default function AdminPage() {
                       onClick={async () => {
                         try {
                           await writeOracle("setMinBaseBond", [BigInt(newMinBaseBond || "0")]);
-                          toast({ title: "Updated", description: "minBaseBond set." });
                         } catch (e: any) {
-                          toast({ title: "Failed", description: e?.shortMessage || e?.message || "Error" });
+                          return toast({ title: "Failed", description: e?.shortMessage || e?.message || "Error" });
                         }
+                        toast({ title: "Updated", description: "minBaseBond set." });
                       }}
                       className="px-4 py-2 bg-white/10 border border-white/20 rounded-lg text-white hover:bg-white/15"
                     >
@@ -1056,10 +1033,10 @@ export default function AdminPage() {
                       onClick={async () => {
                         try {
                           await writeOracle("setEscalationBond", [BigInt(newEscalationBond || "0")]);
-                          toast({ title: "Updated", description: "escalationBond set." });
                         } catch (e: any) {
-                          toast({ title: "Failed", description: e?.shortMessage || e?.message || "Error" });
+                          return toast({ title: "Failed", description: e?.shortMessage || e?.message || "Error" });
                         }
+                        toast({ title: "Updated", description: "escalationBond set." });
                       }}
                       className="px-4 py-2 bg-white/10 border border-white/20 rounded-lg text-white hover:bg-white/15"
                     >
@@ -1070,10 +1047,10 @@ export default function AdminPage() {
                         try {
                           if (newPaused === null) throw new Error("Choose true/false");
                           await writeOracle("setPaused", [newPaused]);
-                          toast({ title: "Updated", description: "paused set." });
                         } catch (e: any) {
-                          toast({ title: "Failed", description: e?.shortMessage || e?.message || "Error" });
+                          return toast({ title: "Failed", description: e?.shortMessage || e?.message || "Error" });
                         }
+                        toast({ title: "Updated", description: "paused set." });
                       }}
                       className="px-4 py-2 bg-white/10 border border-white/20 rounded-lg text-white hover:bg-white/15"
                     >
@@ -1270,7 +1247,7 @@ export default function AdminPage() {
               </div>
             )}
 
-            {arbType === "categorical" && (
+            {arbType === "categorical" and (
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-center">
                 <label className="text-sm text-gray-300">Winner Index (uint)</label>
                 <input
