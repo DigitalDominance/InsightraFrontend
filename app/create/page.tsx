@@ -394,7 +394,7 @@ async function handleCreate() {
       </div>
     );
   }
-
+;
   return (
     <div className="space-y-8">
       
@@ -426,7 +426,7 @@ async function handleCreate() {
       </GlassCard>
 
       <div className="text-center space-y-4">
-        <h1 className="text-4xl md:text-5xl font-bold bg-gradient-to-r from-[#49EACB] to-[#7C3AED] bg-clip-text text-transparent">
+        <h1 className="text-4xl md:text-5xl font-bold bg-gradientt-to-r from-[#49EACB] to-[#7C3AED] bg-clip-text text-transparent">
           Create Prediction Market
         </h1>
         <p className="text-gray-400 text-lg">Pay the creation fee and deploy a new Binary, Categorical or Scalar market</p>
