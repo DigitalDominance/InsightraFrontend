@@ -158,31 +158,31 @@ export default function DocsPage() {
                     </defs>
                     <rect x="10" y="10" width="980" height="400" rx="16" fill="url(#g1)" opacity="0.07"/>
                     <g fontFamily="ui-sans-serif, system-ui" fontSize="14" fill="#d1d5db">
-                      <!-- User -->
+                      {/* User */}
                       <rect x="40" y="60" width="160" height="70" rx="12" fill="#0b0f14" stroke="url(#g1)" filter="url(#shadow)"/>
                       <text x="120" y="100" textAnchor="middle" fill="#fff">User (dApp)</text>
 
-                      <!-- Oracle -->
+                      {/* Oracle */}
                       <rect x="380" y="40" width="240" height="90" rx="12" fill="#0b0f14" stroke="url(#g1)" filter="url(#shadow)"/>
                       <text x="500" y="75" textAnchor="middle" fill="#fff">Predikt Oracle</text>
                       <text x="500" y="93" textAnchor="middle">createQuestionPublic / commit / reveal / finalize</text>
 
-                      <!-- Factories -->
+                      {/* Factories */}
                       <rect x="360" y="180" width="280" height="90" rx="12" fill="#0b0f14" stroke="url(#g1)" filter="url(#shadow)"/>
                       <text x="500" y="215" textAnchor="middle" fill="#fff">Factories</text>
                       <text x="500" y="233" textAnchor="middle">Binary / Categorical / Scalar</text>
 
-                      <!-- Markets -->
+                      {/* Markets */}
                       <rect x="760" y="180" width="200" height="120" rx="12" fill="#0b0f14" stroke="url(#g1)" filter="url(#shadow)"/>
                       <text x="860" y="215" textAnchor="middle" fill="#fff">Market</text>
                       <text x="860" y="233" textAnchor="middle">Trade, LP, Redeem</text>
                       <text x="860" y="251" textAnchor="middle">finalizeFromOracle()</text>
 
-                      <!-- Arbitrator -->
+                      {/* Arbitrator */}
                       <rect x="760" y="40" width="200" height="90" rx="12" fill="#0b0f14" stroke="url(#g1)" filter="url(#shadow)"/>
                       <text x="860" y="75" textAnchor="middle" fill="#fff">SimpleArbitrator</text>
 
-                      <!-- Arrows -->
+                      {/* Arrows */}
                       <line x1="200" y1="95" x2="380" y2="85" stroke="url(#g1)" strokeWidth="2.5" markerEnd="url(#arrow)"/>
                       <text x="290" y="78" textAnchor="middle">createQuestionPublic (fee)</text>
 
@@ -243,7 +243,7 @@ export default function DocsPage() {
                       <line x1="460" y1="95" x2="520" y2="95" stroke="url(#g2)" strokeWidth="2.5" markerEnd="url(#arrow2)"/>
                       <line x1="700" y1="95" x2="760" y2="95" stroke="url(#g2)" strokeWidth="2.5" markerEnd="url(#arrow2)"/>
 
-                      <!-- Dispute path -->
+                      {/* Dispute path */}
                       <rect x="520" y="200" width="180" height="70" rx="10" fill="#0b0f14" stroke="url(#g2)"/>
                       <text x="610" y="238" textAnchor="middle" fill="#fff">challenge & escalate</text>
                       <line x1="610" y1="130" x2="610" y2="200" stroke="url(#g2)" strokeWidth="2.5" markerEnd="url(#arrow2)"/>
