@@ -12,6 +12,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { Menu } from "lucide-react"   // <-- NEW
 
 export default function Navigation() {
   const pathname = usePathname()
@@ -59,7 +60,7 @@ export default function Navigation() {
             </div>
           </a>
 
-          {/* Desktop nav links */}
+          {/* Desktop nav links (unchanged) */}
           <div className="hidden md:flex gap-2">
             {navItems.map((item) => (
               <OutlineLink
@@ -75,7 +76,7 @@ export default function Navigation() {
           </div>
         </div>
 
-        {/* Right side: Connect + Mobile dropdown */}
+        {/* Right side */}
         <div className="flex items-center gap-3">
           {userIsAdmin && (
             <span className="hidden md:inline-flex items-center px-3 py-1 bg-[#49EACB]/10 rounded-full border border-[#49EACB]/30">
@@ -83,25 +84,7 @@ export default function Navigation() {
             </span>
           )}
 
-          {/* Mobile-only dropdown (single) */}
-          <div className="md:hidden">
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <OutlineButton size="md">
-                  <span className="font-cyber">MENU</span>
-                </OutlineButton>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="min-w-[170px] bg-black/80 backdrop-blur-xl border border-white/10">
-                {navItems.map((item) => (
-                  <DropdownMenuItem key={item.href} asChild>
-                    <Link href={item.href}>{item.label}</Link>
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-
-          {/* Connect button (custom) */}
+          {/* Desktop connect (unchanged) */}
           <ConnectButton.Custom>
             {({ account, chain, openConnectModal, openAccountModal, mounted }) => {
               const connected = mounted && account && chain
@@ -126,20 +109,28 @@ export default function Navigation() {
             }}
           </ConnectButton.Custom>
 
-          {/* Mobile connect (short label) */}
-          <div className="md:hidden">
+          {/* Mobile: connect + menu (smaller, icon menu on the RIGHT) */}
+          <div className="md:hidden flex items-center gap-2">
             <ConnectButton.Custom>
               {({ account, chain, openConnectModal, openAccountModal, mounted }) => {
                 const connected = mounted && account && chain
                 if (!connected) {
                   return (
-                    <OutlineButton size="md" onClick={openConnectModal}>
+                    <OutlineButton
+                      size="sm"
+                      onClick={openConnectModal}
+                      className="px-2 py-1 text-xs"
+                    >
                       <span className="font-cyber">CONNECT</span>
                     </OutlineButton>
                   )
                 }
                 return (
-                  <OutlineButton size="md" onClick={openAccountModal}>
+                  <OutlineButton
+                    size="sm"
+                    onClick={openAccountModal}
+                    className="px-2 py-1 text-xs"
+                  >
                     <span className="font-cyber">
                       {account?.address
                         ? `${account.address.slice(0, 4)}…${account.address.slice(-3)}`
@@ -149,6 +140,29 @@ export default function Navigation() {
                 )
               }}
             </ConnectButton.Custom>
+
+            {/* Menu icon (to the RIGHT of connect) */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <OutlineButton
+                  aria-label="Open menu"
+                  size="sm"
+                  className="px-2 py-1"
+                >
+                  <Menu className="h-4 w-4" />
+                </OutlineButton>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent
+                align="end"
+                className="min-w-[170px] bg-black/80 backdrop-blur-xl border border-white/10"
+              >
+                {navItems.map((item) => (
+                  <DropdownMenuItem key={item.href} asChild>
+                    <Link href={item.href}>{item.label}</Link>
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </div>
       </div>
