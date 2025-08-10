@@ -23,6 +23,7 @@ export default function Navigation() {
     { href: "/", label: "MARKETS" },
     { href: "/portfolio", label: "PORTFOLIO" },
     { href: "/create", label: "CREATE" },
+    { href: "/docs", label: "DOCS" },
     ...(userIsAdmin ? [{ href: "/admin", label: "ADMIN" }] : []),
   ] as const
 
