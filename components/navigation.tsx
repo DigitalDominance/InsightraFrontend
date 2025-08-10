@@ -1,10 +1,25 @@
 "use client"
 
+import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { useAccount } from "wagmi"
 import { isAdmin } from "@/lib/admin"
 import { OutlineLink, OutlineButton } from "@/components/ui/gradient-outline"
 import { ConnectButton } from "@rainbow-me/rainbowkit"
+import { Menu } from "lucide-react"
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from "@/components/ui/sheet"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 
 export default function Navigation() {
   const pathname = usePathname()
@@ -13,98 +28,105 @@ export default function Navigation() {
 
   const navItems = [
     { href: "/", label: "MARKETS" },
-    { href: "/portfolio", label: "PORTFOLIO" },
     { href: "/create", label: "CREATE" },
-    ...(userIsAdmin ? [{ href: "/admin", label: "ADMIN" }] : []),
-  ]
+    { href: "/portfolio", label: "PORTFOLIO" },
+  ] as const
 
   return (
     <nav className="sticky top-0 z-50 p-4">
       <div
-        className="flex items-center justify-between py-4 px-6 rounded-xl shadow-2xl backdrop-blur-xl"
-        style={{
-          // Remove the border around the nav container so the logo has no visible outline
-          background: "rgba(0, 0, 0, 0.65)",
-          backdropFilter: "blur(16px)",
-          boxShadow: `
-            0 0 0 1px rgba(73, 234, 203, 0.1),
-            0 0 20px rgba(0, 0, 0, 0.4),
-            inset 0 1px 0 rgba(255, 255, 255, 0.04)
-          `,
-        }}
+        className="flex items-center justify-between py-4 px-6 rounded-xl backdrop-blur-xl border border-white/5 bg-black/60 shadow-[0_0_20px_rgba(0,0,0,0.4)]"
       >
-        <div className="flex items-center space-x-6">
-          {/* Logo */}
-          <a href="/" className="flex items-center space-x-3">
-            {/* Display the Insightra logo without an outline and at a larger size.  The
-             * surrounding wrapper uses no border and grows slightly to make the
-             * logo more prominent in the navbar. */}
-            <div className="w-14 h-14 flex items-center justify-center overflow-hidden">
-              <img
-                src="/insightra-logo.webp"
-                alt="Insightra logo"
-                className="w-full h-full object-contain"
-              />
-            </div>
-            <div className="flex flex-col">
-              <span className="text-2xl font-cyber font-bold bg-gradient-to-r from-[#49EACB] to-[#7C3AED] bg-clip-text text-transparent">
-                INSIGHTRA
-              </span>
-              <span className="text-xs text-gray-400 font-sleek tracking-wider">PREDICTION MARKETS</span>
-            </div>
-          </a>
+        {/* Left: Brand */}
+        <Link href="/" className="font-bold tracking-widest text-white/90">INSIGHTRA</Link>
 
-          {/* Navigation Links */}
-          <div className="hidden md:flex gap-2">
-            {navItems.map((item) => (
-              <OutlineLink
-                key={item.href}
-                href={item.href}
-                size="sm"
-                active={pathname === item.href}
-                className="min-w-[110px] justify-center"
-              >
-                {item.label}
-              </OutlineLink>
-            ))}
-          </div>
+        {/* Center: Desktop nav */}
+        <div className="hidden md:flex items-center gap-3">
+          {navItems.map((it) => (
+            <OutlineLink
+              key={it.href}
+              href={it.href}
+              className={
+                pathname === it.href
+                  ? "border-cyan-300/40 text-white"
+                  : "text-white/70 hover:text-white"
+              }
+            >
+              {it.label}
+            </OutlineLink>
+          ))}
+          {userIsAdmin && (
+            <OutlineLink href="/admin">ADMIN</OutlineLink>
+          )}
         </div>
 
-        {/* Connect Button (Custom) */}
-        <div className="flex items-center gap-3">
-          {userIsAdmin && (
-            <span className="hidden md:inline-flex items-center px-3 py-1 bg-[#49EACB]/10 rounded-full border border-[#49EACB]/30">
-              <span className="text-xs text-[#49EACB] font-cyber tracking-wider">ADMIN</span>
-            </span>
-          )}
+        {/* Right: Wallet & Mobile menu */}
+        <div className="flex items-center gap-2">
+          <div className="hidden md:block">
+            <ConnectButton chainStatus="none" showBalance={false} />
+          </div>
 
-          <ConnectButton.Custom>
-            {({ account, chain, openConnectModal, openAccountModal, mounted }) => {
-              const connected = mounted && account && chain;
-              // When not connected, prompt user to connect their wallet
-              if (!connected) {
-                return (
-                  <OutlineButton size="md" onClick={openConnectModal}>
-                    <span className="font-cyber">
-                      <span className="md:hidden">CONNECT</span>
-                      <span className="hidden md:inline">CONNECT WALLET</span>
-                    </span>
-                  </OutlineButton>
-                );
-              }
-              // When connected, show the user's address only and open the account modal on click.
-              return (
-                <OutlineButton size="md" onClick={openAccountModal}>
-                  <span className="font-cyber">
-                    {/* Always display only the truncated address (0x1234…abcd) and avoid showing network names */}
-                    {account?.address
-                      ? `${account.address.slice(0, 6)}…${account.address.slice(-4)}`
-                      : account.displayName}
-                  </span>
+          {/* Mobile: compact 'More' dropdown for quick nav */}
+          <div className="md:hidden">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <OutlineButton className="px-3 py-2 text-sm">More</OutlineButton>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="min-w-[160px] bg-black/80 backdrop-blur-xl border border-white/10">
+                <DropdownMenuItem asChild>
+                  <Link href="/create">Create</Link>
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild>
+                  <Link href="/portfolio">Portfolio</Link>
+                </DropdownMenuItem>
+                {userIsAdmin && (
+                  <DropdownMenuItem asChild>
+                    <Link href="/admin">Admin</Link>
+                  </DropdownMenuItem>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+
+          {/* Mobile: hamburger sheet with full nav */}
+          <div className="md:hidden">
+            <Sheet>
+              <SheetTrigger asChild>
+                <OutlineButton aria-label="Open menu" className="px-2 py-2">
+                  <Menu className="h-5 w-5" />
                 </OutlineButton>
-              );
-            }}
-          </ConnectButton.Custom>
+              </SheetTrigger>
+              <SheetContent side="right" className="bg-black/80 backdrop-blur-xl border-l border-white/10">
+                <SheetHeader>
+                  <SheetTitle className="text-white/90">Menu</SheetTitle>
+                </SheetHeader>
+                <div className="mt-6 flex flex-col gap-2">
+                  {navItems.map((it) => (
+                    <Link
+                      key={it.href}
+                      href={it.href}
+                      className={
+                        "px-3 py-2 rounded-lg border border-white/10 text-white/80 hover:text-white hover:border-cyan-300/40"
+                      }
+                    >
+                      {it.label}
+                    </Link>
+                  ))}
+                  {userIsAdmin && (
+                    <Link
+                      href="/admin"
+                      className="px-3 py-2 rounded-lg border border-white/10 text-white/80 hover:text-white hover:border-cyan-300/40"
+                    >
+                      ADMIN
+                    </Link>
+                  )}
+                  <div className="pt-4">
+                    <ConnectButton chainStatus="none" showBalance={false} />
+                  </div>
+                </div>
+              </SheetContent>
+            </Sheet>
+          </div>
         </div>
       </div>
     </nav>

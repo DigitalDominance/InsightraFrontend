@@ -12,6 +12,10 @@ import {
   SCALAR_FACTORY_ABI,
   KAS_ORACLE_ABI } from "@/lib/abis";
 import { decodeEventLog, keccak256, toHex } from "viem";
+import Image from "next/image";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import GlassCard from "@/components/ui/glass-card";
 import { OutlineButton, OutlineField } from "@/components/ui/gradient-outline";
 import { useToast } from "@/hooks/use-toast";
@@ -23,6 +27,29 @@ import { useToast } from "@/hooks/use-toast";
  * factory.  The market address is parsed from the emitted event once the
  * transaction is mined.
  */
+
+function TooltipLabel({ label, tip }: { label: string; tip: string }) {
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-sm text-white/90">{label}</span>
+      <TooltipProvider>
+        <Tooltip delayDuration={150}>
+          <TooltipTrigger asChild>
+            <span className="cursor-help text-white/70 hover:text-white">ⓘ</span>
+          </TooltipTrigger>
+          <TooltipContent className="max-w-[320px] bg-neutral-900/85 text-white/90 backdrop-blur-xl rounded-xl border p-4 shadow-2xl"
+            side="top"
+            sideOffset={8}
+            style={{ borderImage: 'linear-gradient(135deg, #0fa, #49EACB) 1' }}>
+            <div className="text-xs leading-relaxed">
+              {tip}
+            </div>
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+    </div>
+  )
+}
 export default function CreatePage() {
   const { address, isConnected } = useAccount();
   const { toast } = useToast();
@@ -370,6 +397,34 @@ async function handleCreate() {
 
   return (
     <div className="space-y-8">
+      
+      <GlassCard className="p-6">
+        <h2 className="text-xl font-semibold mb-2">Market Types — quick guide</h2>
+        <Accordion type="single" collapsible>
+          <AccordionItem value="binary">
+            <AccordionTrigger className="text-white/90">Binary (Yes / No)</AccordionTrigger>
+            <AccordionContent className="text-sm text-white/70">
+              Two outcomes: <strong>Yes</strong> or <strong>No</strong>. Buy the side you believe will win.
+              On resolution, the winning side redeems its collateral; the losing side becomes worthless.
+            </AccordionContent>
+          </AccordionItem>
+          <AccordionItem value="categorical">
+            <AccordionTrigger className="text-white/90">Categorical (Multiple choices)</AccordionTrigger>
+            <AccordionContent className="text-sm text-white/70">
+              Two or more discrete outcomes (e.g., A / B / C). You trade the specific outcome token you think will win.
+              At resolution, only the winning outcome token redeems collateral.
+            </AccordionContent>
+          </AccordionItem>
+          <AccordionItem value="scalar">
+            <AccordionTrigger className="text-white/90">Scalar (Numeric range)</AccordionTrigger>
+            <AccordionContent className="text-sm text-white/70">
+              The result is a number within a min–max range (e.g., price, temperature). Settlement is derived from the
+              final reported value. Ensure you set realistic <em>min</em>, <em>max</em>, and <em>decimals</em>.
+            </AccordionContent>
+          </AccordionItem>
+        </Accordion>
+      </GlassCard>
+
       <div className="text-center space-y-4">
         <h1 className="text-4xl md:text-5xl font-bold bg-gradient-to-r from-[#49EACB] to-[#7C3AED] bg-clip-text text-transparent">
           Create Prediction Market
@@ -381,17 +436,29 @@ async function handleCreate() {
         <div className="space-y-4">
           {/* Market type selection */}
           <div className="flex flex-col md:flex-row md:items-center gap-4">
-            <label className="w-40 font-medium">Market Type</label>
-            <select
-              value={marketType}
-              onChange={(e) => setMarketType(e.target.value as 'binary' | 'categorical' | 'scalar')}
-              className="flex-1 bg-neutral-900/60 backdrop-blur-md border border-gray-700 rounded-lg px-3 py-2 text-white"
-            >
-              <option value="binary">Binary</option>
-              <option value="categorical">Categorical</option>
-              <option value="scalar">Scalar</option>
-            </select>
+            <div className="w-40">
+              <TooltipLabel
+                label="Market Type"
+                tip="Binary = Yes/No. Categorical = two or more named outcomes. Scalar = numeric result within a range."
+              />
+            </div>
+            <div className="flex-1">
+              <Select
+                value={marketType}
+                onValueChange={(v) => setMarketType(v as 'binary' | 'categorical' | 'scalar')}
+              >
+                <SelectTrigger className="w-full bg-neutral-900/60 backdrop-blur-md border border-gray-700 rounded-lg text-white">
+                  <SelectValue placeholder="Choose type" />
+                </SelectTrigger>
+                <SelectContent className="bg-black/80 backdrop-blur-xl border border-white/10 text-white">
+                  <SelectItem value="binary">Binary (Yes/No)</SelectItem>
+                  <SelectItem value="categorical">Categorical (2+)</SelectItem>
+                  <SelectItem value="scalar">Scalar (range)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
           </div>
+</div>
           {/* Market name */}
           <div className="flex flex-col md:flex-row md:items-center gap-4">
             <label className="w-40 font-medium">Market Name</label>
@@ -464,7 +531,11 @@ async function handleCreate() {
           <div className="flex flex-col md:flex-row md:items-center gap-4">
             <label className="w-40 font-medium">Creation Fee</label>
             <div className="flex-1 px-3 py-2 text-white bg-neutral-900/60 border border-gray-700 rounded-lg">
-              {creationFeeFormatted} (bond token units)
+              <div className="flex items-center gap-2">
+                  <Image src="/wkas.png" alt="WKAS" width={18} height={18} className="rounded-full ring-1 ring-white/20" />
+                  <span className="font-semibold">100 WKAS</span>
+                </div>
+                <div className="text-[11px] text-white/50">Paid to the Oracle to publish your question</div>
             </div>
           </div>
           {/* Action buttons */}
