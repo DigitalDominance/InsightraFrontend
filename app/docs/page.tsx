@@ -1,17 +1,16 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
-import { motion } from "framer-motion";
 import { BookOpen, Workflow, Code2, ShieldCheck, GitBranch, ChevronRight } from "lucide-react";
 import GlassCard from "@/components/ui/glass-card";
 
-/** Smooth scroll + active section highlight */
+/** Smooth scroll + active section highlight (no HTML comments anywhere) */
 function useScrollSpy(ids: string[], offset = 80) {
   const [active, setActive] = useState<string>(ids[0] || "");
   useEffect(() => {
     const els = ids.map((id) => document.getElementById(id)).filter(Boolean) as HTMLElement[];
-    if (els.length === 0) return;
+    if (!els.length) return;
 
     const onClick = (e: Event) => {
       const target = e.currentTarget as HTMLAnchorElement;
@@ -28,22 +27,15 @@ function useScrollSpy(ids: string[], offset = 80) {
       }
     };
 
-    // Attach click handlers to internal sidebar links
     const links = Array.from(document.querySelectorAll('a[href^="#"]'));
     links.forEach((a) => a.addEventListener("click", onClick));
 
-    // IntersectionObserver to set active section
     const obs = new IntersectionObserver(
-      (entries) => {
-        entries.forEach((entry) => {
-          if (entry.isIntersecting) setActive(entry.target.id);
-        });
-      },
+      (entries) => entries.forEach((entry) => entry.isIntersecting && setActive(entry.target.id)),
       { rootMargin: `-${offset + 1}px 0px -60% 0px`, threshold: 0.01 }
     );
     els.forEach((el) => obs.observe(el));
 
-    // Jump to hash on first load
     if (window.location.hash) {
       const id = window.location.hash.slice(1);
       const el = document.getElementById(id);
@@ -79,12 +71,10 @@ export default function DocsPage() {
 
   return (
     <div className="relative">
-      {/* Background gradient */}
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(1000px_600px_at_70%_-20%,rgba(124,58,237,0.25),transparent),radial-gradient(800px_500px_at_20%_0%,rgba(73,234,203,0.15),transparent)]" />
+      <div className="pointer-events-none absolute inset-0 [background:radial-gradient(1000px_600px_at_70%_-20%,rgba(124,58,237,0.25),transparent),radial-gradient(800px_500px_at_20%_0%,rgba(73,234,203,0.15),transparent)]" />
 
       <div className="mx-auto max-w-7xl px-4 md:px-8 py-10 md:py-16">
         <div className="grid grid-cols-1 md:grid-cols-[260px_1fr] gap-8">
-          {/* Sidebar */}
           <aside className="hidden md:block sticky top-24 h-[calc(100dvh-8rem)] overflow-y-auto pr-4">
             <nav className="space-y-2">
               {sections.map((s) => (
@@ -101,7 +91,6 @@ export default function DocsPage() {
             </nav>
           </aside>
 
-          {/* Content */}
           <main className="space-y-10">
             <header className="flex items-start justify-between gap-6">
               <div>
@@ -115,7 +104,6 @@ export default function DocsPage() {
               </div>
             </header>
 
-            {/* OVERVIEW */}
             <GlassCard id="intro">
               <div className="p-6 md:p-8 space-y-4">
                 <div className="flex items-center gap-2 text-[#49EACB]">
@@ -128,20 +116,18 @@ export default function DocsPage() {
               </div>
             </GlassCard>
 
-            {/* CONTRACTS & ARCHITECTURE */}
             <GlassCard id="contracts">
               <div className="p-6 md:p-8 space-y-6">
                 <div className="flex items-center gap-2 text-[#49EACB]">
                   <GitBranch className="w-5 h-5" /> <span className="font-semibold">Contracts & Architecture</span>
                 </div>
                 <ul className="list-disc list-inside text-gray-300 space-y-2">
-                  <li><b>Factories</b>: <code>BinaryFactory</code>, <code>CategoricalFactory</code>, <code>ScalarFactory</code> deploy markets and manage listing controls (remove/restore, redeem fee bps).</li>
+                  <li><b>Factories</b>: <code>BinaryFactory</code>, <code>CategoricalFactory</code>, <code>ScalarFactory</code> deploy markets and manage listing controls.</li>
                   <li><b>Markets</b>: <code>BinaryMarket</code>, <code>CategoricalMarket</code>, <code>ScalarMarket</code> (via <code>MarketBase</code>) mint outcome tokens, take liquidity, and settle from oracle results.</li>
                   <li><b>Oracle</b>: <code>KasOracle</code> (Predikt) exposes commit–reveal with escalating bonds and optional arbitration for final rulings.</li>
                   <li><b>Arbitrator</b>: <code>SimpleArbitrator</code> provides a deterministic onchain “court” when disputes escalate.</li>
                 </ul>
 
-                {/* Diagram: Architecture with arrows */}
                 <div className="bg-white/5 rounded-xl p-4">
                   <svg viewBox="0 0 1000 420" className="w-full h-auto">
                     <defs>
@@ -153,36 +139,30 @@ export default function DocsPage() {
                         <path d="M2,2 L10,6 L2,10 z" fill="url(#g1)" />
                       </marker>
                       <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
-                        <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="black" flood-opacity="0.6"/>
+                        <feDropShadow dx="0" dy="2" stdDeviation="3" floodColor="black" floodOpacity="0.6"/>
                       </filter>
                     </defs>
                     <rect x="10" y="10" width="980" height="400" rx="16" fill="url(#g1)" opacity="0.07"/>
                     <g fontFamily="ui-sans-serif, system-ui" fontSize="14" fill="#d1d5db">
-                      {/* User */}
                       <rect x="40" y="60" width="160" height="70" rx="12" fill="#0b0f14" stroke="url(#g1)" filter="url(#shadow)"/>
                       <text x="120" y="100" textAnchor="middle" fill="#fff">User (dApp)</text>
 
-                      {/* Oracle */}
                       <rect x="380" y="40" width="240" height="90" rx="12" fill="#0b0f14" stroke="url(#g1)" filter="url(#shadow)"/>
                       <text x="500" y="75" textAnchor="middle" fill="#fff">Predikt Oracle</text>
                       <text x="500" y="93" textAnchor="middle">createQuestionPublic / commit / reveal / finalize</text>
 
-                      {/* Factories */}
                       <rect x="360" y="180" width="280" height="90" rx="12" fill="#0b0f14" stroke="url(#g1)" filter="url(#shadow)"/>
                       <text x="500" y="215" textAnchor="middle" fill="#fff">Factories</text>
                       <text x="500" y="233" textAnchor="middle">Binary / Categorical / Scalar</text>
 
-                      {/* Markets */}
                       <rect x="760" y="180" width="200" height="120" rx="12" fill="#0b0f14" stroke="url(#g1)" filter="url(#shadow)"/>
                       <text x="860" y="215" textAnchor="middle" fill="#fff">Market</text>
                       <text x="860" y="233" textAnchor="middle">Trade, LP, Redeem</text>
                       <text x="860" y="251" textAnchor="middle">finalizeFromOracle()</text>
 
-                      {/* Arbitrator */}
                       <rect x="760" y="40" width="200" height="90" rx="12" fill="#0b0f14" stroke="url(#g1)" filter="url(#shadow)"/>
                       <text x="860" y="75" textAnchor="middle" fill="#fff">SimpleArbitrator</text>
 
-                      {/* Arrows */}
                       <line x1="200" y1="95" x2="380" y2="85" stroke="url(#g1)" strokeWidth="2.5" markerEnd="url(#arrow)"/>
                       <text x="290" y="78" textAnchor="middle">createQuestionPublic (fee)</text>
 
@@ -203,7 +183,6 @@ export default function DocsPage() {
               </div>
             </GlassCard>
 
-            {/* MARKET LIFECYCLE */}
             <GlassCard id="market-lifecycle">
               <div className="p-6 md:p-8 space-y-4">
                 <div className="flex items-center gap-2 text-[#49EACB]">
@@ -217,7 +196,6 @@ export default function DocsPage() {
                   <li><b>Dispute</b>: If challenged repeatedly up to <code>maxRounds</code>, the question is sent to <code>SimpleArbitrator</code> for a final onchain ruling.</li>
                 </ol>
 
-                {/* Diagram: commit → reveal → finalize with disputes */}
                 <div className="bg-white/5 rounded-xl p-4">
                   <svg viewBox="0 0 1000 360" className="w-full h-auto">
                     <defs>
@@ -243,7 +221,6 @@ export default function DocsPage() {
                       <line x1="460" y1="95" x2="520" y2="95" stroke="url(#g2)" strokeWidth="2.5" markerEnd="url(#arrow2)"/>
                       <line x1="700" y1="95" x2="760" y2="95" stroke="url(#g2)" strokeWidth="2.5" markerEnd="url(#arrow2)"/>
 
-                      {/* Dispute path */}
                       <rect x="520" y="200" width="180" height="70" rx="10" fill="#0b0f14" stroke="url(#g2)"/>
                       <text x="610" y="238" textAnchor="middle" fill="#fff">challenge & escalate</text>
                       <line x1="610" y1="130" x2="610" y2="200" stroke="url(#g2)" strokeWidth="2.5" markerEnd="url(#arrow2)"/>
@@ -255,7 +232,6 @@ export default function DocsPage() {
               </div>
             </GlassCard>
 
-            {/* ORACLE */}
             <GlassCard id="oracle">
               <div className="p-6 md:p-8 space-y-4">
                 <div className="flex items-center gap-2 text-[#49EACB]">
@@ -265,22 +241,19 @@ export default function DocsPage() {
                   Predikt (<code>KasOracle</code>) is an optimistic oracle with commit–reveal and bond escalation.
                 </p>
                 <div className="text-gray-300 space-y-2">
-                  <p><b>Question params</b> (per <code>QuestionParams</code>):</p>
+                  <p><b>Question params</b>:</p>
                   <ul className="list-disc list-inside ml-4">
-                    <li><code>qtype</code> (binary / categorical / scalar), <code>options</code> (<= 256 for categorical)</li>
-                    <li><code>scalarMin</code>, <code>scalarMax</code>, <code>scalarDecimals</code> (for scalar questions)</li>
-                    <li><code>timeout</code> (liveness seconds), <code>bondMultiplier</code> (2–6), <code>maxRounds</code> (<= 10)</li>
-                    <li><code>templateHash</code> (hash of the question text), <code>dataSource</code> (URL/IPFS), <code>consumer</code> (optional), <code>openingTs</code> (earliest timestamp to answer)</li>
+                    <li><code>qtype</code> (binary / categorical / scalar), <code>options</code> (<= 256 for categorical), scalar fields for scalar questions</li>
+                    <li><code>timeout</code> (liveness), <code>bondMultiplier</code>, <code>maxRounds</code></li>
+                    <li><code>templateHash</code>, <code>dataSource</code>, <code>consumer</code>, <code>openingTs</code></li>
                   </ul>
-                  <p><b>Commit</b>: Reporters submit <code>hashCommit = keccak256(abi.encode(id, encodedOutcome, salt, msg.sender))</code>.</p>
-                  <p><b>Reveal</b>: Provide <code>encodedOutcome</code>, <code>salt</code>, and a <b>bond</b> &ge; <code>minBaseBond</code> or <code>prevBond × bondMultiplier</code>.</p>
-                  <p><b>Finalize</b>: After liveness with no successful escalation, <code>finalize(id)</code> pays the winning reporter from the bond pool minus <code>feeBps</code> to <code>feeSink</code>.</p>
-                  <p><b>Arbitration</b>: If escalated to the limit, <code>SimpleArbitrator</code> issues a decision consumed by <code>receiveArbitratorRuling</code>.</p>
+                  <p><b>Commit</b>: <code>hashCommit = keccak256(abi.encode(id, encodedOutcome, salt, msg.sender))</code>.</p>
+                  <p><b>Reveal</b>: Provide <code>encodedOutcome</code>, <code>salt</code>, and a <b>bond</b> ≥ <code>minBaseBond</code> or previous best × <code>bondMultiplier</code>.</p>
+                  <p><b>Finalize</b>: After liveness with no successful escalation, <code>finalize(id)</code> pays winner from the bond pool minus <code>feeBps</code> to <code>feeSink</code>.</p>
                 </div>
               </div>
             </GlassCard>
 
-            {/* FEES */}
             <GlassCard id="fees">
               <div className="p-6 md:p-8 space-y-4">
                 <div className="flex items-center gap-2 text-[#49EACB]">
@@ -288,31 +261,25 @@ export default function DocsPage() {
                 </div>
                 <ul className="list-disc list-inside text-gray-300 space-y-2">
                   <li><b>Market creation</b>: Public creation calls <code>createQuestionPublic</code> and pays the current <code>questionFee</code> in the oracle’s <code>bondToken</code>.</li>
-                  <li><b>Protocol fee</b>: On resolution, a share of the total bond pot (<code>feeBps</code>) is sent to <code>feeSink</code>; the rest goes to the winning reporter.</li>
+                  <li><b>Protocol fee</b>: On resolution, a share of the bond pot (<code>feeBps</code>) is sent to <code>feeSink</code>; the rest goes to the winning reporter.</li>
                   <li><b>Bonds</b>: <code>minBaseBond</code> + geometric escalation via <code>bondMultiplier</code> per round up to <code>maxRounds</code>.</li>
                 </ul>
               </div>
             </GlassCard>
 
-            {/* UMA COMPARISON */}
             <GlassCard id="uma-compare">
               <div className="p-6 md:p-8 space-y-4">
                 <div className="flex items-center gap-2 text-[#49EACB]">
                   <Code2 className="w-5 h-5" /> <span className="font-semibold">Why Predikt vs UMA OO</span>
                 </div>
-                <p className="text-gray-300">
-                  UMA’s OO pioneered proposer/disputer with a liveness period and a fallback to the DVM. Predikt keeps the optimistic design,
-                  but it’s built for chain-local, DAO-owned resolution.
-                </p>
                 <ul className="list-disc list-inside text-gray-300 space-y-2">
-                  <li><b>Commit–Reveal</b>: Predikt uses commit–reveal (plus <code>recommit</code>) to prevent copycats during liveness—UMA’s default flow doesn’t require this step.</li>
-                  <li><b>Local Arbitration</b>: Final escalations go to a pluggable onchain arbitrator, keeping costs and policy within your chain, instead of routing to UMA’s DVM.</li>
-                  <li><b>More knobs</b>: Explicit <code>minBaseBond</code>, <code>bondMultiplier</code>, <code>maxRounds</code> for tighter control over spam and griefing resistance.</li>
+                  <li><b>Commit–Reveal</b>: Predikt adds commit–reveal (and <code>recommit</code>) to prevent copycats during liveness; UMA’s default flow doesn’t require it.</li>
+                  <li><b>Local Arbitration</b>: Final escalations go to a pluggable onchain arbitrator instead of UMA’s DVM—keeps policy and finality on your chain.</li>
+                  <li><b>Config knobs</b>: <code>minBaseBond</code>, <code>bondMultiplier</code>, <code>maxRounds</code> for stronger spam/grief resistance.</li>
                 </ul>
               </div>
             </GlassCard>
 
-            {/* DEV REFS */}
             <GlassCard id="dev">
               <div className="p-6 md:p-8 space-y-4">
                 <div className="flex items-center gap-2 text-[#49EACB]">
@@ -335,7 +302,6 @@ function finalizeFromOracle(); // pulls oracle result and settles
               </div>
             </GlassCard>
 
-            {/* FAQ */}
             <GlassCard id="faq">
               <div className="p-6 md:p-8 space-y-3">
                 <div className="flex items-center gap-2 text-[#49EACB]">
