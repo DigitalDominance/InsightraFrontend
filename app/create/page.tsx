@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import Image from "next/image";
 import { useAccount, useWriteContract } from "wagmi";
 import { config } from "@/lib/wagmi";
@@ -53,7 +53,7 @@ function TooltipLabel(props: { label: string; tip: string }) {
             className="max-w-[320px] bg-neutral-900/85 text-white/90 backdrop-blur-xl rounded-xl border p-4 shadow-2xl"
             side="top"
             sideOffset={8}
-            style={{ borderImage: "linear-gradient(135deg, #0fa, #7C3AED) 1" }}
+            style={{ borderImage: "linear-gradient(135deg, #49EACB, #7C3AED) 1" }}
           >
             <div className="text-xs leading-relaxed">{tip}</div>
           </TooltipContent>
@@ -70,12 +70,13 @@ export default function CreatePage() {
 
   // Form state
   const [marketType, setMarketType] = useState<'binary' | 'categorical' | 'scalar'>('binary');
-  const [marketName, setMarketName] = useState<string>("");
+  const [marketName, setMarketName] = useState<string>(""); 
   const [numOutcomes, setNumOutcomes] = useState<number>(3);
   const [outcomeNames, setOutcomeNames] = useState<string>("A,B,C");
   const [scalarMin, setScalarMin] = useState<string>("0");
   const [scalarMax, setScalarMax] = useState<string>("100");
   const [scalarDecimals, setScalarDecimals] = useState<number>(2);
+  const [submitting, setSubmitting] = useState(false);
 
   const selectedFactory: Hex | undefined = useMemo(() => {
     if (!FACTORIES) return undefined as any;
@@ -84,7 +85,7 @@ export default function CreatePage() {
     return FACTORIES.scalar as Hex;
   }, [marketType]);
 
-  // UI: early guard
+  // Guard missing addresses
   if (!DEFAULT_ORACLE || !DEFAULT_COLLATERAL) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
@@ -99,17 +100,19 @@ export default function CreatePage() {
   }
 
   async function handleCreate() {
-    if (!isConnected || !address) {
-      toast({ title: "Connect wallet", description: "Please connect your wallet to continue." });
-      return;
-    }
-    if (!selectedFactory) {
-      toast({ title: "Missing factory", description: "No factory for selected market type." });
-      return;
-    }
-
+    if (submitting) return;
+    setSubmitting(true);
     try {
-      // 1) Read questionFee and bondToken from Oracle
+      if (!isConnected || !address) {
+        toast({ title: "Connect wallet", description: "Please connect your wallet to continue." });
+        return;
+      }
+      if (!selectedFactory) {
+        toast({ title: "Missing factory", description: "No factory for selected market type." });
+        return;
+      }
+
+      // 1) Read questionFee and bondToken
       const [qFee, qBondToken] = await Promise.all([
         config.publicClient.readContract({
           address: DEFAULT_ORACLE as Hex,
@@ -136,64 +139,25 @@ export default function CreatePage() {
         await config.publicClient.waitForTransactionReceipt({ hash: approveHash });
       }
 
-      // 3) Build QuestionParams for the Oracle
+      // 3) Build params for oracle
       const now = Math.floor(Date.now() / 1000);
       const template = marketName || 'Untitled';
       const templateHash = keccak256(toHex(template));
-      const timeout = 24 * 60 * 60; // 24h liveness
+      const timeout = 24 * 60 * 60;
       const bondMultiplier = 2;
       const maxRounds = 5;
-      const openingTs = BigInt(now + 60 * 60); // +1h
+      const openingTs = BigInt(now + 60 * 60);
 
       const params: any =
         marketType === 'binary'
-          ? {
-              qtype: 0,
-              options: 2,
-              scalarMin: 0n,
-              scalarMax: 0n,
-              scalarDecimals: 0,
-              timeout,
-              bondMultiplier,
-              maxRounds,
-              templateHash,
-              dataSource: 'user',
-              consumer: '0x0000000000000000000000000000000000000000',
-              openingTs,
-            }
+          ? { qtype: 0, options: 2, scalarMin: 0n, scalarMax: 0n, scalarDecimals: 0, timeout, bondMultiplier, maxRounds, templateHash, dataSource: 'user', consumer: '0x0000000000000000000000000000000000000000', openingTs }
           : marketType === 'categorical'
-          ? {
-              qtype: 1,
-              options: Number(numOutcomes),
-              scalarMin: 0n,
-              scalarMax: 0n,
-              scalarDecimals: 0,
-              timeout,
-              bondMultiplier,
-              maxRounds,
-              templateHash,
-              dataSource: 'user',
-              consumer: '0x0000000000000000000000000000000000000000',
-              openingTs,
-            }
-          : {
-              qtype: 2,
-              options: 0,
-              scalarMin: BigInt(scalarMin || '0'),
-              scalarMax: BigInt(scalarMax || '0'),
-              scalarDecimals: Number(scalarDecimals || 0),
-              timeout,
-              bondMultiplier,
-              maxRounds,
-              templateHash,
-              dataSource: 'user',
-              consumer: '0x0000000000000000000000000000000000000000',
-              openingTs,
-            };
+          ? { qtype: 1, options: Number(numOutcomes), scalarMin: 0n, scalarMax: 0n, scalarDecimals: 0, timeout, bondMultiplier, maxRounds, templateHash, dataSource: 'user', consumer: '0x0000000000000000000000000000000000000000', openingTs }
+          : { qtype: 2, options: 0, scalarMin: BigInt(scalarMin || '0'), scalarMax: BigInt(scalarMax || '0'), scalarDecimals: Number(scalarDecimals || 0), timeout, bondMultiplier, maxRounds, templateHash, dataSource: 'user', consumer: '0x0000000000000000000000000000000000000000', openingTs };
 
       const salt = keccak256(toHex(String(Date.now()) + address));
 
-      // 4) createQuestionPublic
+      // 4) Create question on oracle
       const qHash = await writeContractAsync({
         address: DEFAULT_ORACLE as Hex,
         abi: KAS_ORACLE_ABI,
@@ -202,7 +166,7 @@ export default function CreatePage() {
       }) as Hex;
       const qReceipt = await config.publicClient.waitForTransactionReceipt({ hash: qHash });
 
-      // 5) extract questionId from QuestionCreated
+      // 5) Extract questionId
       let questionId: Hex | undefined = undefined;
       for (const log of qReceipt.logs) {
         try {
@@ -222,7 +186,7 @@ export default function CreatePage() {
         return;
       }
 
-      // 6) submit* on factory with the new questionId
+      // 6) Submit market
       let submitHash: Hex | undefined = undefined;
       if (marketType === 'binary') {
         submitHash = await writeContractAsync({
@@ -249,49 +213,16 @@ export default function CreatePage() {
           address: selectedFactory,
           abi: SCALAR_FACTORY_ABI,
           functionName: 'submitScalar',
-          args: [
-            DEFAULT_COLLATERAL as Hex,
-            DEFAULT_ORACLE as Hex,
-            questionId,
-            marketName,
-            BigInt(scalarMin || '0'),
-            BigInt(scalarMax || '0'),
-            Number(scalarDecimals || 0),
-          ],
+          args: [DEFAULT_COLLATERAL as Hex, DEFAULT_ORACLE as Hex, questionId, marketName, BigInt(scalarMin || '0'), BigInt(scalarMax || '0'), Number(scalarDecimals || 0)],
         }) as Hex;
       }
       const receipt = await config.publicClient.waitForTransactionReceipt({ hash: submitHash });
 
-      // 7) Parse created market address from corresponding event
-      let marketAddr: Hex | undefined = undefined;
-      const abi = marketType === 'binary' ? BINARY_FACTORY_ABI
-                : marketType === 'categorical' ? CATEGORICAL_FACTORY_ABI
-                : SCALAR_FACTORY_ABI;
-      const eventName = marketType === 'binary' ? 'BinaryCreated'
-                      : marketType === 'categorical' ? 'CategoricalCreated'
-                      : 'ScalarCreated';
-
-      for (const log of receipt.logs) {
-        try {
-          const parsed: any = decodeEventLog({
-            abi: abi as any,
-            data: log.data as Hex,
-            topics: log.topics as readonly Hex[],
-          });
-          if (parsed?.eventName === eventName) {
-            marketAddr = parsed.args.market as Hex;
-            break;
-          }
-        } catch {}
-      }
-
-      if (marketAddr) {
-        toast({ title: 'Market created', description: `Deployed at ${marketAddr}` });
-      } else {
-        toast({ title: 'Market created', description: 'Market deployed but address not parsed. Check explorer.' });
-      }
+      toast({ title: 'Market created', description: 'Transaction confirmed. Check your portfolio or explorer.' });
     } catch (err: any) {
       toast({ title: 'Create failed', description: err?.shortMessage || err?.message || 'Unknown error' });
+    } finally {
+      setSubmitting(false);
     }
   }
 
@@ -351,6 +282,7 @@ export default function CreatePage() {
           <div className="inline-flex items-center gap-2 px-3 py-2 text-white bg-neutral-900/60 border border-white/10 rounded-full">
             <Image src="/wkas.png" alt="WKAS" width={18} height={18} className="rounded-full ring-1 ring-white/20" />
             <span className="font-semibold">100 WKAS</span>
+            <span className="text-xs text-white/60">creation fee</span>
           </div>
         </div>
 
@@ -460,8 +392,8 @@ export default function CreatePage() {
         )}
 
         <div className="flex justify-end pt-2">
-          <OutlineButton onClick={handleCreate}>
-            <span className="font-cyber">Create Market</span>
+          <OutlineButton onClick={handleCreate} disabled={submitting}>
+            <span className="font-cyber">{submitting ? 'Creating…' : 'Create Market'}</span>
           </OutlineButton>
         </div>
       </GlassCard>
