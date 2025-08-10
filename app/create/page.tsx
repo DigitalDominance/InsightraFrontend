@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import Image from "next/image";
-import { useAccount, useWriteContract, useChainId } from "wagmi";
+import { useAccount, useWriteContract, useChainId, useSwitchChain } from "wagmi";
 import { config } from "@/lib/wagmi";
 import { FACTORIES, DEFAULT_COLLATERAL, DEFAULT_ORACLE } from "@/lib/contracts";
 import {
@@ -12,7 +12,7 @@ import {
   SCALAR_FACTORY_ABI,
   KAS_ORACLE_ABI,
 } from "@/lib/abis";
-import { decodeEventLog, keccak256, toHex } from "viem";
+import { decodeEventLog, keccak256, toHex, type Hex } from "viem";
 
 import GlassCard from "@/components/ui/glass-card";
 import { OutlineButton } from "@/components/ui/gradient-outline";
@@ -37,8 +37,6 @@ import {
   AccordionTrigger,
 } from "@/components/ui/accordion";
 
-type Hex = `0x${string}`;
-
 function InfoTip({ label, tip }: { label: string; tip: string }) {
   return (
     <div className="flex items-center gap-2">
@@ -49,7 +47,7 @@ function InfoTip({ label, tip }: { label: string; tip: string }) {
             <span className="cursor-help text-white/70 hover:text-white">ⓘ</span>
           </TooltipTrigger>
           <TooltipContent
-            side="top"
+            side="right"
             align="start"
             sideOffset={10}
             collisionPadding={32}
@@ -69,10 +67,11 @@ export default function CreatePage() {
   const { address, isConnected } = useAccount();
   const { toast } = useToast();
   const { writeContractAsync } = useWriteContract();
+  const { switchChainAsync } = useSwitchChain();
 
   // Form state
   const [marketType, setMarketType] = useState<'binary' | 'categorical' | 'scalar'>('binary');
-  const [marketName, setMarketName] = useState<string>(""); 
+  const [marketName, setMarketName] = useState<string>("");
   const [numOutcomes, setNumOutcomes] = useState<number>(3);
   const [outcomeNames, setOutcomeNames] = useState<string>("A,B,C");
   const [scalarMin, setScalarMin] = useState<string>("0");
@@ -81,20 +80,19 @@ export default function CreatePage() {
   const [submitting, setSubmitting] = useState(false);
 
   const selectedFactory: Hex | undefined = useMemo(() => {
-    if (!FACTORIES) return undefined as any;
     if (marketType === 'binary') return FACTORIES.binary as Hex;
     if (marketType === 'categorical') return FACTORIES.categorical as Hex;
     return FACTORIES.scalar as Hex;
   }, [marketType]);
 
-  // Guard missing addresses
+  // Config sanity (render-time)
   if (!DEFAULT_ORACLE || !DEFAULT_COLLATERAL) {
     return (
-      <div className="flex items-center justify-center min-h-[60vh]">
-        <GlassCard className="p-6 text-center">
+      <div className="max-w-3xl mx-auto">
+        <GlassCard className="text-center">
           <h2 className="text-2xl font-bold mb-2">Configuration Missing</h2>
           <p className="text-sm text-white/70">
-            Please set NEXT_PUBLIC_DEFAULT_ORACLE and NEXT_PUBLIC_DEFAULT_COLLATERAL.
+            Please set <code>NEXT_PUBLIC_DEFAULT_ORACLE</code> and <code>NEXT_PUBLIC_DEFAULT_COLLATERAL</code>.
           </p>
         </GlassCard>
       </div>
@@ -104,17 +102,24 @@ export default function CreatePage() {
   async function handleCreate() {
     if (submitting) return;
     setSubmitting(true);
+
     try {
       if (!isConnected || !address) {
         toast({ title: "Connect wallet", description: "Please connect your wallet to continue." });
         return;
       }
+
+      const requiredChainId = config.chains?.[0]?.id as number | undefined;
+      if (requiredChainId && chainId !== requiredChainId) {
+        await switchChainAsync({ chainId: requiredChainId });
+      }
+
       if (!selectedFactory) {
-        toast({ title: "Missing factory", description: "No factory for selected market type." });
+        toast({ title: "Missing factory", description: "No factory for the selected market type. Check env vars." });
         return;
       }
 
-      // 1) Read questionFee and bondToken
+      // 1) Read oracle fee & bond token
       const [qFee, qBondToken] = await Promise.all([
         config.publicClient.readContract({
           address: DEFAULT_ORACLE as Hex,
@@ -130,7 +135,7 @@ export default function CreatePage() {
         }),
       ]) as [bigint, Hex];
 
-      // 2) Approve Oracle to pull the fee (should prompt wallet)
+      // 2) Approve fee to oracle (if needed)
       if (qFee > 0n) {
         const approveHash = await writeContractAsync({
           chainId,
@@ -142,44 +147,83 @@ export default function CreatePage() {
         await config.publicClient.waitForTransactionReceipt({ hash: approveHash });
       }
 
-      // 3) Build params for oracle
-      const now = Math.floor(Date.now() / 1000);
+      // 3) Build question params
+      const nowSec = Math.floor(Date.now() / 1000);
       const template = marketName || 'Untitled';
       const templateHash = keccak256(toHex(template));
       const timeout = 24 * 60 * 60;
       const bondMultiplier = 2;
       const maxRounds = 5;
-      const openingTs = BigInt(now + 60 * 60);
+      const openingTs = BigInt(nowSec + 60 * 60);
 
-      const params: any =
+      const params =
         marketType === 'binary'
-          ? { qtype: 0, options: 2, scalarMin: 0n, scalarMax: 0n, scalarDecimals: 0, timeout, bondMultiplier, maxRounds, templateHash, dataSource: 'user', consumer: '0x0000000000000000000000000000000000000000', openingTs }
+          ? {
+              qtype: 0,
+              options: 2,
+              scalarMin: 0n,
+              scalarMax: 0n,
+              scalarDecimals: 0,
+              timeout,
+              bondMultiplier,
+              maxRounds,
+              templateHash,
+              dataSource: "WKAS",
+              consumer: "0x0000000000000000000000000000000000000000",
+              openingTs,
+            }
           : marketType === 'categorical'
-          ? { qtype: 1, options: Number(numOutcomes), scalarMin: 0n, scalarMax: 0n, scalarDecimals: 0, timeout, bondMultiplier, maxRounds, templateHash, dataSource: 'user', consumer: '0x0000000000000000000000000000000000000000', openingTs }
-          : { qtype: 2, options: 0, scalarMin: BigInt(scalarMin || '0'), scalarMax: BigInt(scalarMax || '0'), scalarDecimals: Number(scalarDecimals || 0), timeout, bondMultiplier, maxRounds, templateHash, dataSource: 'user', consumer: '0x0000000000000000000000000000000000000000', openingTs };
+          ? {
+              qtype: 1,
+              options: Number(numOutcomes),
+              scalarMin: 0n,
+              scalarMax: 0n,
+              scalarDecimals: 0,
+              timeout,
+              bondMultiplier,
+              maxRounds,
+              templateHash,
+              dataSource: "WKAS",
+              consumer: "0x0000000000000000000000000000000000000000",
+              openingTs,
+            }
+          : {
+              qtype: 2,
+              options: 0,
+              scalarMin: BigInt(scalarMin || "0"),
+              scalarMax: BigInt(scalarMax || "0"),
+              scalarDecimals: Number(scalarDecimals || 0),
+              timeout,
+              bondMultiplier,
+              maxRounds,
+              templateHash,
+              dataSource: "WKAS",
+              consumer: "0x0000000000000000000000000000000000000000",
+              openingTs,
+            };
 
       const salt = keccak256(toHex(String(Date.now()) + address));
 
-      // 4) Create question on oracle
+      // 4) Create question (wallet prompt #1 or #2 depending on allowance)
       const qHash = await writeContractAsync({
         chainId,
         address: DEFAULT_ORACLE as Hex,
         abi: KAS_ORACLE_ABI,
         functionName: 'createQuestionPublic',
-        args: [params, salt],
+        args: [params as any, salt],
       }) as Hex;
       const qReceipt = await config.publicClient.waitForTransactionReceipt({ hash: qHash });
 
-      // 5) Extract questionId
+      // 5) Parse QuestionCreated(id)
       let questionId: Hex | undefined = undefined;
       for (const log of qReceipt.logs) {
         try {
-          const parsed: any = decodeEventLog({
+          const parsed = decodeEventLog({
             abi: KAS_ORACLE_ABI as any,
             data: log.data as Hex,
             topics: log.topics as readonly Hex[],
-          });
-          if (parsed.eventName === 'QuestionCreated') {
+          }) as any;
+          if (parsed?.eventName === 'QuestionCreated') {
             questionId = parsed.args?.id as Hex;
             break;
           }
@@ -190,7 +234,7 @@ export default function CreatePage() {
         return;
       }
 
-      // 6) Submit market (prompts wallet)
+      // 6) Submit market (wallet prompt)
       let submitHash: Hex | undefined = undefined;
       if (marketType === 'binary') {
         submitHash = await writeContractAsync({
@@ -202,7 +246,7 @@ export default function CreatePage() {
         }) as Hex;
       } else if (marketType === 'categorical') {
         const count = Number(numOutcomes);
-        const namesArray = outcomeNames.split(',').map(s => s.trim()).filter(Boolean);
+        const namesArray = outcomeNames.split(',').map((s) => s.trim()).filter(Boolean);
         if (namesArray.length !== count) {
           toast({ title: 'Input mismatch', description: 'Outcome names must match the number of outcomes.' });
           return;
@@ -220,7 +264,15 @@ export default function CreatePage() {
           address: selectedFactory,
           abi: SCALAR_FACTORY_ABI,
           functionName: 'submitScalar',
-          args: [DEFAULT_COLLATERAL as Hex, DEFAULT_ORACLE as Hex, questionId, template, BigInt(scalarMin || '0'), BigInt(scalarMax || '0'), Number(scalarDecimals || 0)],
+          args: [
+            DEFAULT_COLLATERAL as Hex,
+            DEFAULT_ORACLE as Hex,
+            questionId,
+            template,
+            BigInt(scalarMin || "0"),
+            BigInt(scalarMax || "0"),
+            Number(scalarDecimals || 0),
+          ],
         }) as Hex;
       }
       await config.publicClient.waitForTransactionReceipt({ hash: submitHash as Hex });
@@ -246,8 +298,7 @@ export default function CreatePage() {
   }
 
   return (
-    <div className="space-y-8">
-
+    <div className="space-y-8 max-w-4xl mx-auto">
       {/* Main Create card */}
       <GlassCard className="p-6 space-y-6">
         <div className="text-center space-y-2">
@@ -267,8 +318,8 @@ export default function CreatePage() {
           </div>
           <div className="md:col-span-2">
             <Select value={marketType} onValueChange={(v) => setMarketType(v as any)}>
-              <SelectTrigger className="w-full bg-neutral-900/60 backdrop-blur-md border border-gray-700 rounded-lg text-white">
-                <SelectValue placeholder="Choose type" />
+              <SelectTrigger className="bg-neutral-900/60 backdrop-blur-md border border-gray-700 rounded-lg px-3 py-2 text-white">
+                <SelectValue placeholder="Select type" />
               </SelectTrigger>
               <SelectContent className="bg-black/80 backdrop-blur-xl border border-white/10 text-white">
                 <SelectItem value="binary">Binary (Yes/No)</SelectItem>
@@ -284,7 +335,7 @@ export default function CreatePage() {
           <div>
             <InfoTip
               label="Market Name"
-              tip="A short human-friendly title. Included in the oracle template hash."
+              tip="Human-readable title for your market. This will be displayed to traders and on the explorer."
             />
           </div>
           <input
@@ -312,7 +363,7 @@ export default function CreatePage() {
             </div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-center">
               <div>
-                <InfoTip label="Outcome Names" tip="Comma‑separated list. Count must match the number of outcomes." />
+                <InfoTip label="Outcome Names" tip="Comma-separated list. Count must match the number of outcomes." />
               </div>
               <input
                 value={outcomeNames}
@@ -328,7 +379,7 @@ export default function CreatePage() {
         {marketType === 'scalar' && (
           <>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-center">
-              <div><InfoTip label="Min" tip="Lowest possible numeric value." /></div>
+              <div><InfoTip label="Min" tip="Minimum possible value for the result." /></div>
               <input
                 value={scalarMin}
                 onChange={(e) => setScalarMin(e.target.value)}
@@ -336,7 +387,7 @@ export default function CreatePage() {
               />
             </div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-center">
-              <div><InfoTip label="Max" tip="Highest possible numeric value." /></div>
+              <div><InfoTip label="Max" tip="Maximum possible value for the result." /></div>
               <input
                 value={scalarMax}
                 onChange={(e) => setScalarMax(e.target.value)}
@@ -358,33 +409,31 @@ export default function CreatePage() {
 
         {/* Footer row: fee pill on left, button on right */}
         <div className="flex items-center justify-between pt-2">
-          <div className="inline-flex items-center gap-2 px-3 py-2 text-white bg-neutral-900/60 border border-white/10 rounded-full">
+          <div className="inline-flex items-center gap-2 px-3 py-1.5 text-white bg-neutral-900/60 border border-white/10 rounded-full">
             <Image src="/wkas.png" alt="WKAS" width={18} height={18} className="rounded-full ring-1 ring-white/20" />
             <span className="font-semibold">100 WKAS</span>
             <span className="text-xs text-white/60">CREATION FEE</span>
           </div>
-          <OutlineButton onClick={handleCreate} disabled={submitting}>
+          <OutlineButton type="button" onClick={handleCreate} disabled={submitting}>
             <span className="font-cyber">{submitting ? 'Creating…' : 'Create Market'}</span>
           </OutlineButton>
         </div>
       </GlassCard>
 
-      {/* Quick explainer (moved UNDER main card) */}
+      {/* Quick explainer (UNDER main card) */}
       <GlassCard className="p-6">
-        <h2 className="text-xl font-semibold mb-2">Market Types — quick guide</h2>
+        <h2 className="text-xl font-semibold mb-3">Market Types</h2>
         <Accordion type="single" collapsible>
           <AccordionItem value="binary">
-            <AccordionTrigger className="text-white/90">Binary (Yes / No)</AccordionTrigger>
+            <AccordionTrigger className="text-white/90">Binary (Yes/No)</AccordionTrigger>
             <AccordionContent className="text-sm text-white/70">
-              Two outcomes: <strong>Yes</strong> or <strong>No</strong>. Buy the side you believe will win.
-              On resolution, the winning side redeems its collateral; the losing side becomes worthless.
+              Two outcomes: YES or NO. Traders buy/sell YES/NO tokens to express their view.
             </AccordionContent>
           </AccordionItem>
           <AccordionItem value="categorical">
-            <AccordionTrigger className="text-white/90">Categorical (Multiple choices)</AccordionTrigger>
+            <AccordionTrigger className="text-white/90">Categorical (2+ named outcomes)</AccordionTrigger>
             <AccordionContent className="text-sm text-white/70">
-              Two or more discrete outcomes (e.g., A / B / C). You trade the specific outcome token you think will win.
-              At resolution, only the winning outcome token redeems collateral.
+              Multiple discrete options (e.g., which team wins). You provide the labels.
             </AccordionContent>
           </AccordionItem>
           <AccordionItem value="scalar">
