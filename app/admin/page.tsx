@@ -1,72 +1,161 @@
 "use client";
 
-import { useState } from 'react';
-import { motion } from 'framer-motion';
-import GlassCard from '@/components/ui/glass-card';
-import { Shield, CheckCircle, XCircle, Clock, AlertTriangle, Plus, Calendar, DollarSign, Users, Info } from 'lucide-react';
-import { useAccount } from 'wagmi';
-import { isAdmin } from '@/lib/admin';
+import { useEffect, useMemo, useState } from "react";
+import { motion } from "framer-motion";
+import GlassCard from "@/components/ui/glass-card";
+import {
+  Shield,
+  CheckCircle,
+  XCircle,
+  Clock,
+  AlertTriangle,
+  Plus,
+  Calendar,
+  DollarSign,
+  Users,
+  Info,
+  Ban,
+  Gavel,
+  Settings,
+} from "lucide-react";
+import {
+  useAccount,
+  useChainId,
+  useSwitchChain,
+  useWriteContract,
+} from "wagmi";
+import { isAdmin as isAdminUtil } from "@/lib/admin";
+import { FACTORIES, DEFAULT_ORACLE, DEFAULT_COLLATERAL } from "@/lib/contracts";
+import { useToast } from "@/hooks/use-toast";
+import { readContract, waitForTransactionReceipt } from "@wagmi/core";
+import { config } from "@/lib/wagmi";
+import {
+  decodeEventLog,
+  keccak256,
+  toHex,
+  encodeAbiParameters,
+  parseAbi,
+  type Hex,
+} from "viem";
 
-// Mock admin data
-const mockAdminData = {
-  pendingMarkets: [
-    {
-      id: 1,
-      title: "Will Ethereum 2.0 be fully deployed by Q2 2024?",
-      creator: "0x1234...5678",
-      created: "2024-01-15",
-      liquidity: 5000,
-      status: "pending",
-    },
-    {
-      id: 2,
-      title: "Will Tesla stock reach $300 by end of 2024?",
-      creator: "0x8765...4321",
-      created: "2024-01-14",
-      liquidity: 3000,
-      status: "pending",
-    },
-  ],
-  marketsToResolve: [
-    {
-      id: 3,
-      title: "Will Bitcoin reach $50,000 by January 2024?",
-      endDate: "2024-01-31",
-      volume: 125000,
-      participants: 1247,
-      status: "ended",
-    },
-  ],
-  stats: {
-    totalMarkets: 156,
-    activeMarkets: 89,
-    totalVolume: 2450000,
-    totalUsers: 5678,
-  },
-};
+/** Hard-gated DAO address */
+const DAO_ADDRESS = "0xD031272E734F2B38515F2F55F2F935d3227b739d".toLowerCase();
+
+/** Minimal ABIs used here. (We keep them local so this file is self-sufficient.) */
+const ORACLE_ABI = parseAbi([
+  "event QuestionCreated(bytes32 indexed id, (uint8 qtype, uint32 options, int256 scalarMin, int256 scalarMax, uint32 scalarDecimals, uint32 timeout, uint8 bondMultiplier, uint8 maxRounds, bytes32 templateHash, string dataSource, address consumer, uint64 openingTs) params)",
+  "function createQuestion((uint8,uint32,int256,int256,uint32,uint32,uint8,uint8,bytes32,string,address,uint64),bytes32) external returns (bytes32)",
+  "function finalize(bytes32 id) external",
+  "function setQuestionFee(uint256) external",
+  "function questionFee() view returns (uint256)",
+  "function bondToken() view returns (address)",
+  "function setFeeBps(uint256) external",
+  "function feeBps() view returns (uint256)",
+  "function setFeeSink(address) external",
+  "function feeSink() view returns (address)",
+  "function setArbitrator(address) external",
+  "function arbitrator() view returns (address)",
+  "function setMinBaseBond(uint256) external",
+  "function minBaseBond() view returns (uint256)",
+  "function setEscalationBond(uint256) external",
+  "function escalationBond() view returns (uint256)",
+  "function setPaused(bool) external",
+  "function paused() view returns (bool)",
+]);
+
+const BINARY_FACTORY_ABI = parseAbi([
+  "function submitBinary(address collateral, address oracle, bytes32 questionId, string marketName) external returns (address)",
+  "function removeListing(address market, string reason) external",
+  "function restoreListing(address market) external",
+  "function setDefaultRedeemFeeBps(uint256) external",
+  "function marketCount() view returns (uint256)",
+  "function defaultRedeemFeeBps() view returns (uint256)"
+]);
+
+const CATEGORICAL_FACTORY_ABI = parseAbi([
+  "function submitCategorical(address collateral, address oracle, bytes32 questionId, string marketName, uint8 numOutcomes, string[] outcomeNames) external returns (address)",
+  "function removeListing(address market, string reason) external",
+  "function restoreListing(address market) external",
+  "function setDefaultRedeemFeeBps(uint256) external",
+  "function marketCount() view returns (uint256)",
+  "function defaultRedeemFeeBps() view returns (uint256)"
+]);
+
+const SCALAR_FACTORY_ABI = parseAbi([
+  "function submitScalar(address collateral, address oracle, bytes32 questionId, string marketName, int256 min, int256 max, uint32 decimals) external returns (address)",
+  "function removeListing(address market, string reason) external",
+  "function restoreListing(address market) external",
+  "function setDefaultRedeemFeeBps(uint256) external",
+  "function marketCount() view returns (uint256)",
+  "function defaultRedeemFeeBps() view returns (uint256)"
+]);
+
+const MARKET_BASE_ABI = parseAbi([
+  "function finalizeFromOracle() external"
+]);
+
+const SIMPLE_ARBITRATOR_ABI = parseAbi([
+  "function adminRule(bytes32 questionId, bytes encodedOutcome, address payee) external"
+]);
+
+/** Utils */
+const normalizeHash = (h: any): Hex => (typeof h === "string" ? h : (h?.hash as Hex));
+const isHex32 = (v: string) => /^0x[0-9a-fA-F]{64}$/.test(v?.trim() || "");
+
+/** Small helper to run write on a list of (addr, abi, fn, args) until one succeeds */
+async function tryMultiWrite(
+  writeContractAsync: ReturnType<typeof useWriteContract>["writeContractAsync"],
+  calls: Array<{ address: Hex; abi: any; functionName: string; args: any[] }>
+) {
+  for (const c of calls) {
+    try {
+      const txLike = await writeContractAsync({
+        address: c.address,
+        abi: c.abi,
+        functionName: c.functionName as any,
+        args: c.args,
+      });
+      return normalizeHash(txLike);
+    } catch (e) {
+      // try next
+    }
+  }
+  throw new Error("No compatible function on provided contracts.");
+}
+
+type TabId =
+  | "overview"
+  | "create"
+  | "moderate"
+  | "oracle"
+  | "factories"
+  | "resolution"
+  | "arbitration";
 
 export default function AdminPage() {
   const { address, isConnected } = useAccount();
-  const [selectedTab, setSelectedTab] = useState('overview');
-  const [formData, setFormData] = useState({
-    title: '',
-    description: '',
-    category: '',
-    endDate: '',
-    initialLiquidity: '',
-    fee: '2',
-  });
+  const chainId = useChainId();
+  const { switchChainAsync } = useSwitchChain();
+  const { writeContractAsync } = useWriteContract();
+  const { toast } = useToast();
 
-  // Strict admin check - multiple layers of security
-  const userIsAdmin = isConnected && isAdmin(address);
+  const [selectedTab, setSelectedTab] = useState<TabId>("overview");
 
-  // Block access immediately if not admin
+  // ---- Admin gate ----
+  const userIsAdmin =
+    isConnected &&
+    !!address &&
+    (address.toLowerCase() === DAO_ADDRESS || isAdminUtil(address));
+
+  // Redirect to connect or deny
   if (!isConnected) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
-        <GlassCard className="text-center">
+        <GlassCard className="text-center p-6">
           <h2 className="text-2xl font-bold mb-4">Connect Your Wallet</h2>
-          <p className="text-gray-400">Please connect your wallet to access admin panel</p>
+          <p className="text-gray-400">
+            Please connect your wallet to access admin panel
+          </p>
         </GlassCard>
       </div>
     );
@@ -75,9 +164,9 @@ export default function AdminPage() {
   if (!userIsAdmin) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
-        <GlassCard className="text-center">
+        <GlassCard className="text-center p-6">
           <AlertTriangle className="w-16 h-16 text-red-400 mx-auto mb-4" />
-          <h2 className="text-2xl font-bold mb-4">Access Denied</h2>
+          <h2 className="text-2xl font-bold mb-2">Access Denied</h2>
           <p className="text-gray-400">You don't have admin privileges</p>
           <p className="text-xs text-gray-500 mt-2">Connected: {address}</p>
         </GlassCard>
@@ -85,41 +174,506 @@ export default function AdminPage() {
     );
   }
 
-  const handleApproveMarket = (marketId: number) => {
-    console.log('Approving market:', marketId);
-    alert('Market approval functionality will be implemented with smart contracts!');
+  // ---- Chain ensure helper ----
+  const ensureChain = async () => {
+    const requiredChainId = (config.chains?.[0]?.id as number | undefined) || chainId;
+    if (chainId !== requiredChainId) {
+      await switchChainAsync({ chainId: requiredChainId });
+    }
   };
 
-  const handleRejectMarket = (marketId: number) => {
-    console.log('Rejecting market:', marketId);
-    alert('Market rejection functionality will be implemented with smart contracts!');
+  // ##############################################
+  //  TAB: Admin Create Market (owner path: no fee)
+  // ##############################################
+  const [marketType, setMarketType] = useState<"binary" | "categorical" | "scalar">("binary");
+  const [marketName, setMarketName] = useState<string>("");
+  const [numOutcomes, setNumOutcomes] = useState<number>(3);
+  const [outcomeNames, setOutcomeNames] = useState<string>("A,B,C");
+  const [scalarMin, setScalarMin] = useState<string>("0");
+  const [scalarMax, setScalarMax] = useState<string>("100");
+  const [scalarDecimals, setScalarDecimals] = useState<number>(2);
+  const [creating, setCreating] = useState<boolean>(false);
+  const [lastQuestionId, setLastQuestionId] = useState<string>("");
+  const [lastMarketAddress, setLastMarketAddress] = useState<string>("");
+
+  const selectedFactory: Hex | undefined = useMemo(() => {
+    if (marketType === "binary") return FACTORIES.binary as Hex;
+    if (marketType === "categorical") return FACTORIES.categorical as Hex;
+    return FACTORIES.scalar as Hex;
+  }, [marketType]);
+
+  const handleAdminCreate = async () => {
+    if (creating) return;
+    setCreating(true);
+    setLastQuestionId("");
+    setLastMarketAddress("");
+
+    try {
+      await ensureChain();
+      if (!DEFAULT_ORACLE || !DEFAULT_COLLATERAL || !selectedFactory) {
+        toast({
+          title: "Missing config",
+          description: "Check DEFAULT_ORACLE / DEFAULT_COLLATERAL / factory addresses.",
+        });
+        return;
+      }
+
+      const nowSec = Math.floor(Date.now() / 1000);
+      const template = marketName || "Untitled";
+      const templateHash = keccak256(toHex(template));
+      const timeout = 24 * 60 * 60;
+      const bondMultiplier = 2;
+      const maxRounds = 5;
+      const openingTs = BigInt(nowSec + 60 * 60);
+
+      const base = {
+        timeout,
+        bondMultiplier,
+        maxRounds,
+        templateHash,
+        dataSource: "WKAS",
+        consumer: "0x0000000000000000000000000000000000000000",
+        openingTs,
+      };
+
+      const params =
+        marketType === "binary"
+          ? {
+              qtype: 0,
+              options: 2,
+              scalarMin: 0,
+              scalarMax: 0,
+              scalarDecimals: 0,
+              ...base,
+            }
+          : marketType === "categorical"
+          ? {
+              qtype: 1,
+              options: Number(numOutcomes),
+              scalarMin: 0,
+              scalarMax: 0,
+              scalarDecimals: 0,
+              ...base,
+            }
+          : {
+              qtype: 2,
+              options: 0,
+              scalarMin: BigInt(scalarMin || "0"),
+              scalarMax: BigInt(scalarMax || "0"),
+              scalarDecimals: Number(scalarDecimals || 0),
+              ...base,
+            };
+
+      const salt = keccak256(toHex(String(Date.now()) + address));
+
+      // 1) Owner path: createQuestion (no fee)
+      const qHashLike = await writeContractAsync({
+        address: DEFAULT_ORACLE as Hex,
+        abi: ORACLE_ABI,
+        functionName: "createQuestion",
+        args: [params as any, salt],
+      });
+      const qHash = normalizeHash(qHashLike);
+      const qReceipt = await waitForTransactionReceipt(config, { hash: qHash });
+
+      // Parse QuestionCreated(id)
+      let questionId: Hex | undefined = undefined;
+      for (const log of qReceipt.logs) {
+        try {
+          const parsed = decodeEventLog({
+            abi: ORACLE_ABI,
+            data: log.data as Hex,
+            topics: log.topics as readonly Hex[],
+          }) as any;
+          if (parsed?.eventName === "QuestionCreated") {
+            questionId = parsed.args?.id as Hex;
+            break;
+          }
+        } catch {}
+      }
+      if (!questionId) {
+        toast({ title: "Oracle error", description: "Could not obtain questionId from events." });
+        return;
+      }
+      setLastQuestionId(questionId);
+
+      // 2) Submit via factory
+      let submitTx: Hex | undefined;
+      if (marketType === "binary") {
+        const txLike = await writeContractAsync({
+          address: selectedFactory,
+          abi: BINARY_FACTORY_ABI,
+          functionName: "submitBinary",
+          args: [DEFAULT_COLLATERAL as Hex, DEFAULT_ORACLE as Hex, questionId, template],
+        });
+        submitTx = normalizeHash(txLike);
+      } else if (marketType === "categorical") {
+        const count = Number(numOutcomes);
+        const namesArray = outcomeNames.split(",").map((s) => s.trim()).filter(Boolean);
+        if (namesArray.length !== count) {
+          toast({
+            title: "Input mismatch",
+            description: "Outcome names must match the number of outcomes.",
+          });
+          return;
+        }
+        const txLike = await writeContractAsync({
+          address: selectedFactory,
+          abi: CATEGORICAL_FACTORY_ABI,
+          functionName: "submitCategorical",
+          args: [DEFAULT_COLLATERAL as Hex, DEFAULT_ORACLE as Hex, questionId, template, count, namesArray],
+        });
+        submitTx = normalizeHash(txLike);
+      } else {
+        const txLike = await writeContractAsync({
+          address: selectedFactory,
+          abi: SCALAR_FACTORY_ABI,
+          functionName: "submitScalar",
+          args: [
+            DEFAULT_COLLATERAL as Hex,
+            DEFAULT_ORACLE as Hex,
+            questionId,
+            template,
+            BigInt(scalarMin || "0"),
+            BigInt(scalarMax || "0"),
+            Number(scalarDecimals || 0),
+          ],
+        });
+        submitTx = normalizeHash(txLike);
+      }
+
+      const submitReceipt = await waitForTransactionReceipt(config, { hash: submitTx! });
+
+      // Heuristic: first created market address may be in logs as 'address' topic/arg (not guaranteed);
+      // we won't decode here (factory may emit a custom event). Present success toast instead.
+      toast({ title: "Admin Market Created", description: "Question + market deployed successfully." });
+      setLastMarketAddress("(see explorer / factory events)");
+    } catch (err: any) {
+      toast({ title: "Create failed", description: err?.shortMessage || err?.message || "Unknown error" });
+    } finally {
+      setCreating(false);
+    }
   };
 
-  const handleResolveMarket = (marketId: number, outcome: 'yes' | 'no') => {
-    console.log('Resolving market:', marketId, 'with outcome:', outcome);
-    alert(`Market resolution functionality will be implemented with smart contracts!`);
+  // ########################
+  //  TAB: Moderation (factories)
+  // ########################
+  const [modMarket, setModMarket] = useState<string>("");
+  const [modReason, setModReason] = useState<string>("");
+  const [modBusy, setModBusy] = useState<boolean>(false);
+
+  const handleRemoveListing = async () => {
+    if (modBusy) return;
+    setModBusy(true);
+    try {
+      await ensureChain();
+      if (!modMarket) throw new Error("Market address required");
+      if (!FACTORIES?.binary && !FACTORIES?.categorical && !FACTORIES?.scalar)
+        throw new Error("Factory addresses missing");
+
+      const calls = [
+        FACTORIES?.binary && {
+          address: FACTORIES.binary as Hex,
+          abi: BINARY_FACTORY_ABI,
+          functionName: "removeListing",
+          args: [modMarket as Hex, modReason || "Removed by admin"],
+        },
+        FACTORIES?.categorical && {
+          address: FACTORIES.categorical as Hex,
+          abi: CATEGORICAL_FACTORY_ABI,
+          functionName: "removeListing",
+          args: [modMarket as Hex, modReason || "Removed by admin"],
+        },
+        FACTORIES?.scalar && {
+          address: FACTORIES.scalar as Hex,
+          abi: SCALAR_FACTORY_ABI,
+          functionName: "removeListing",
+          args: [modMarket as Hex, modReason || "Removed by admin"],
+        },
+      ].filter(Boolean) as Array<{ address: Hex; abi: any; functionName: string; args: any[] }>;
+
+      const tx = await tryMultiWrite(writeContractAsync, calls);
+      await waitForTransactionReceipt(config, { hash: tx });
+      toast({ title: "Listing removed", description: "Market has been unlisted." });
+    } catch (err: any) {
+      toast({ title: "Remove failed", description: err?.shortMessage || err?.message || "Unknown error" });
+    } finally {
+      setModBusy(false);
+    }
   };
 
-  const handleCreateMarket = (e: React.FormEvent) => {
-    e.preventDefault();
-    console.log('Creating market with data:', formData);
-    alert('Market creation functionality will be implemented with smart contracts!');
-    // Reset form
-    setFormData({
-      title: '',
-      description: '',
-      category: '',
-      endDate: '',
-      initialLiquidity: '',
-      fee: '2',
+  const handleRestoreListing = async () => {
+    if (modBusy) return;
+    setModBusy(true);
+    try {
+      await ensureChain();
+      if (!modMarket) throw new Error("Market address required");
+
+      const calls = [
+        FACTORIES?.binary && {
+          address: FACTORIES.binary as Hex,
+          abi: BINARY_FACTORY_ABI,
+          functionName: "restoreListing",
+          args: [modMarket as Hex],
+        },
+        FACTORIES?.categorical && {
+          address: FACTORIES.categorical as Hex,
+          abi: CATEGORICAL_FACTORY_ABI,
+          functionName: "restoreListing",
+          args: [modMarket as Hex],
+        },
+        FACTORIES?.scalar && {
+          address: FACTORIES.scalar as Hex,
+          abi: SCALAR_FACTORY_ABI,
+          functionName: "restoreListing",
+          args: [modMarket as Hex],
+        },
+      ].filter(Boolean) as Array<{ address: Hex; abi: any; functionName: string; args: any[] }>;
+
+      const tx = await tryMultiWrite(writeContractAsync, calls);
+      await waitForTransactionReceipt(config, { hash: tx });
+      toast({ title: "Listing restored", description: "Market is visible again." });
+    } catch (err: any) {
+      toast({ title: "Restore failed", description: err?.shortMessage || err?.message || "Unknown error" });
+    } finally {
+      setModBusy(false);
+    }
+  };
+
+  // ########################
+  //  TAB: Oracle Controls
+  // ########################
+  const [oracleReads, setOracleReads] = useState<any>(null);
+  const [oracleBusy, setOracleBusy] = useState<boolean>(false);
+
+  const refreshOracle = async () => {
+    if (!DEFAULT_ORACLE) return;
+    try {
+      const [questionFee, feeBps, feeSink, arbitrator, minBaseBond, escalationBond, paused, bondToken] =
+        await Promise.all([
+          readContract(config, { address: DEFAULT_ORACLE as Hex, abi: ORACLE_ABI, functionName: "questionFee", args: [] }) as Promise<bigint>,
+          readContract(config, { address: DEFAULT_ORACLE as Hex, abi: ORACLE_ABI, functionName: "feeBps", args: [] }) as Promise<number>,
+          readContract(config, { address: DEFAULT_ORACLE as Hex, abi: ORACLE_ABI, functionName: "feeSink", args: [] }) as Promise<Hex>,
+          readContract(config, { address: DEFAULT_ORACLE as Hex, abi: ORACLE_ABI, functionName: "arbitrator", args: [] }) as Promise<Hex>,
+          readContract(config, { address: DEFAULT_ORACLE as Hex, abi: ORACLE_ABI, functionName: "minBaseBond", args: [] }) as Promise<bigint>,
+          readContract(config, { address: DEFAULT_ORACLE as Hex, abi: ORACLE_ABI, functionName: "escalationBond", args: [] }) as Promise<bigint>,
+          readContract(config, { address: DEFAULT_ORACLE as Hex, abi: ORACLE_ABI, functionName: "paused", args: [] }) as Promise<boolean>,
+          readContract(config, { address: DEFAULT_ORACLE as Hex, abi: ORACLE_ABI, functionName: "bondToken", args: [] }) as Promise<Hex>,
+        ]);
+      setOracleReads({
+        questionFee: questionFee.toString(),
+        feeBps: Number(feeBps),
+        feeSink,
+        arbitrator,
+        minBaseBond: minBaseBond.toString(),
+        escalationBond: escalationBond.toString(),
+        paused,
+        bondToken,
+      });
+    } catch (e) {
+      setOracleReads(null);
+    }
+  };
+
+  useEffect(() => {
+    refreshOracle();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [address]);
+
+  const [newQuestionFee, setNewQuestionFee] = useState<string>("");
+  const [newFeeBps, setNewFeeBps] = useState<string>("");
+  const [newFeeSink, setNewFeeSink] = useState<string>("");
+  const [newArbitrator, setNewArbitrator] = useState<string>("");
+  const [newMinBaseBond, setNewMinBaseBond] = useState<string>("");
+  const [newEscalationBond, setNewEscalationBond] = useState<string>("");
+  const [newPaused, setNewPaused] = useState<boolean | null>(null);
+
+  const writeOracle = async (fn: string, args: any[]) => {
+    await ensureChain();
+    const txLike = await writeContractAsync({
+      address: DEFAULT_ORACLE as Hex,
+      abi: ORACLE_ABI,
+      functionName: fn as any,
+      args,
     });
+    const tx = normalizeHash(txLike);
+    await waitForTransactionReceipt(config, { hash: tx });
+    await refreshOracle();
   };
 
-  const tabs = [
-    { id: 'overview', label: 'Overview', count: null },
-    { id: 'pending', label: 'Pending Approval', count: mockAdminData.pendingMarkets.length },
-    { id: 'resolve', label: 'Markets to Resolve', count: mockAdminData.marketsToResolve.length },
-    { id: 'create', label: 'Create Market', count: null },
+  // ########################
+  //  TAB: Factories
+  // ########################
+  const [factoryReads, setFactoryReads] = useState<any>(null);
+  const refreshFactories = async () => {
+    try {
+      const res: any = {};
+      if (FACTORIES?.binary) {
+        const [cnt, fee] = await Promise.all([
+          readContract(config, { address: FACTORIES.binary as Hex, abi: BINARY_FACTORY_ABI, functionName: "marketCount", args: [] }) as Promise<bigint>,
+          readContract(config, { address: FACTORIES.binary as Hex, abi: BINARY_FACTORY_ABI, functionName: "defaultRedeemFeeBps", args: [] }) as Promise<number>,
+        ]);
+        res.binary = { count: Number(cnt), redeemFeeBps: Number(fee) };
+      }
+      if (FACTORIES?.categorical) {
+        const [cnt, fee] = await Promise.all([
+          readContract(config, { address: FACTORIES.categorical as Hex, abi: CATEGORICAL_FACTORY_ABI, functionName: "marketCount", args: [] }) as Promise<bigint>,
+          readContract(config, { address: FACTORIES.categorical as Hex, abi: CATEGORICAL_FACTORY_ABI, functionName: "defaultRedeemFeeBps", args: [] }) as Promise<number>,
+        ]);
+        res.categorical = { count: Number(cnt), redeemFeeBps: Number(fee) };
+      }
+      if (FACTORIES?.scalar) {
+        const [cnt, fee] = await Promise.all([
+          readContract(config, { address: FACTORIES.scalar as Hex, abi: SCALAR_FACTORY_ABI, functionName: "marketCount", args: [] }) as Promise<bigint>,
+          readContract(config, { address: FACTORIES.scalar as Hex, abi: SCALAR_FACTORY_ABI, functionName: "defaultRedeemFeeBps", args: [] }) as Promise<number>,
+        ]);
+        res.scalar = { count: Number(cnt), redeemFeeBps: Number(fee) };
+      }
+      setFactoryReads(res);
+    } catch (e) {
+      setFactoryReads(null);
+    }
+  };
+  useEffect(() => {
+    refreshFactories();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [address]);
+
+  const [binaryRedeemFee, setBinaryRedeemFee] = useState<string>("");
+  const [categoricalRedeemFee, setCategoricalRedeemFee] = useState<string>("");
+  const [scalarRedeemFee, setScalarRedeemFee] = useState<string>("");
+
+  const setFactoryFee = async (which: "binary" | "categorical" | "scalar") => {
+    await ensureChain();
+    const addr = (FACTORIES as any)[which] as Hex;
+    const abi = which === "binary" ? BINARY_FACTORY_ABI : which === "categorical" ? CATEGORICAL_FACTORY_ABI : SCALAR_FACTORY_ABI;
+    const value =
+      which === "binary"
+        ? Number(binaryRedeemFee || 0)
+        : which === "categorical"
+        ? Number(categoricalRedeemFee || 0)
+        : Number(scalarRedeemFee || 0);
+    const txLike = await writeContractAsync({
+      address: addr,
+      abi,
+      functionName: "setDefaultRedeemFeeBps",
+      args: [value],
+    });
+    const tx = normalizeHash(txLike);
+    await waitForTransactionReceipt(config, { hash: tx });
+    await refreshFactories();
+  };
+
+  // ########################
+  //  TAB: Resolution
+  // ########################
+  const [finalizeQuestionId, setFinalizeQuestionId] = useState<string>("");
+  const [finalizeMarketAddr, setFinalizeMarketAddr] = useState<string>("");
+  const [resBusy, setResBusy] = useState<boolean>(false);
+
+  const doFinalizeQuestion = async () => {
+    if (resBusy) return;
+    setResBusy(true);
+    try {
+      await ensureChain();
+      if (!isHex32(finalizeQuestionId)) throw new Error("Invalid questionId (bytes32 hex)");
+      const txLike = await writeContractAsync({
+        address: DEFAULT_ORACLE as Hex,
+        abi: ORACLE_ABI,
+        functionName: "finalize",
+        args: [finalizeQuestionId as Hex],
+      });
+      const tx = normalizeHash(txLike);
+      await waitForTransactionReceipt(config, { hash: tx });
+      toast({ title: "Question finalized", description: "Oracle question finalized." });
+    } catch (err: any) {
+      toast({ title: "Finalize failed", description: err?.shortMessage || err?.message || "Unknown error" });
+    } finally {
+      setResBusy(false);
+    }
+  };
+
+  const doFinalizeMarket = async () => {
+    if (resBusy) return;
+    setResBusy(true);
+    try {
+      await ensureChain();
+      if (!finalizeMarketAddr) throw new Error("Market address required");
+      const txLike = await writeContractAsync({
+        address: finalizeMarketAddr as Hex,
+        abi: MARKET_BASE_ABI,
+        functionName: "finalizeFromOracle",
+        args: [],
+      });
+      const tx = normalizeHash(txLike);
+      await waitForTransactionReceipt(config, { hash: tx });
+      toast({ title: "Market finalized", description: "Market pulled oracle result." });
+    } catch (err: any) {
+      toast({ title: "Finalize failed", description: err?.shortMessage || err?.message || "Unknown error" });
+    } finally {
+      setResBusy(false);
+    }
+  };
+
+  // ########################
+  //  TAB: Arbitration (optional)
+  // ########################
+  const [arbAddr, setArbAddr] = useState<string>("");
+  const [arbQuestionId, setArbQuestionId] = useState<string>("");
+  const [arbType, setArbType] = useState<"binary" | "categorical" | "scalar">("binary");
+  const [arbBinaryValue, setArbBinaryValue] = useState<"yes" | "no">("yes");
+  const [arbCategoricalIndex, setArbCategoricalIndex] = useState<number>(0);
+  const [arbScalarValue, setArbScalarValue] = useState<string>("0");
+  const [arbPayee, setArbPayee] = useState<string>("");
+  const [arbBusy, setArbBusy] = useState<boolean>(false);
+
+  const doAdminRule = async () => {
+    if (arbBusy) return;
+    setArbBusy(true);
+    try {
+      await ensureChain();
+      if (!arbAddr) throw new Error("Arbitrator address required");
+      if (!isHex32(arbQuestionId)) throw new Error("Invalid questionId (bytes32)");
+
+      let encoded: Hex;
+      if (arbType === "binary") {
+        const val = arbBinaryValue === "yes";
+        // bytes = abi.encode(bool)
+        encoded = encodeAbiParameters([{ type: "bool" }], [val]) as Hex;
+      } else if (arbType === "categorical") {
+        encoded = encodeAbiParameters([{ type: "uint256" }], [BigInt(arbCategoricalIndex)]) as Hex;
+      } else {
+        // scalar: abi.encode(int256)
+        encoded = encodeAbiParameters([{ type: "int256" }], [BigInt(arbScalarValue || "0")]) as Hex;
+      }
+
+      const txLike = await writeContractAsync({
+        address: arbAddr as Hex,
+        abi: SIMPLE_ARBITRATOR_ABI,
+        functionName: "adminRule",
+        args: [arbQuestionId as Hex, encoded, (arbPayee || address) as Hex],
+      });
+      const tx = normalizeHash(txLike);
+      await waitForTransactionReceipt(config, { hash: tx });
+      toast({ title: "Arbitration executed", description: "Admin ruling submitted." });
+    } catch (err: any) {
+      toast({ title: "Arbitration failed", description: err?.shortMessage || err?.message || "Unknown error" });
+    } finally {
+      setArbBusy(false);
+    }
+  };
+
+  // ########################
+  //   UI RENDER
+  // ########################
+  const tabs: Array<{ id: TabId; label: string; icon?: any }> = [
+    { id: "overview", label: "Overview", icon: Shield },
+    { id: "create", label: "Admin Create", icon: Plus },
+    { id: "moderate", label: "Moderate", icon: Ban },
+    { id: "oracle", label: "Oracle", icon: Settings },
+    { id: "factories", label: "Factories", icon: Gavel },
+    { id: "resolution", label: "Resolution", icon: CheckCircle },
+    { id: "arbitration", label: "Arbitration", icon: Gavel },
   ];
 
   return (
@@ -136,309 +690,626 @@ export default function AdminPage() {
             Admin Panel
           </h1>
         </div>
-        <p className="text-gray-400 text-lg">
-          Manage markets and platform operations
-        </p>
-        <div className="text-xs text-gray-500">
-          Admin: {address}
-        </div>
+        <p className="text-gray-400 text-lg">Manage markets and platform operations</p>
+        <div className="text-xs text-gray-500">Admin: {address}</div>
       </motion.div>
-
-      {/* Stats - Only show on overview */}
-      {selectedTab === 'overview' && (
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-          <GlassCard>
-            <div className="text-center">
-              <p className="text-2xl font-bold text-white">{mockAdminData.stats.totalMarkets}</p>
-              <p className="text-gray-400 text-sm">Total Markets</p>
-            </div>
-          </GlassCard>
-          <GlassCard>
-            <div className="text-center">
-              <p className="text-2xl font-bold text-green-400">{mockAdminData.stats.activeMarkets}</p>
-              <p className="text-gray-400 text-sm">Active Markets</p>
-            </div>
-          </GlassCard>
-          <GlassCard>
-            <div className="text-center">
-              <p className="text-2xl font-bold text-[#49EACB]">${mockAdminData.stats.totalVolume.toLocaleString()}</p>
-              <p className="text-gray-400 text-sm">Total Volume</p>
-            </div>
-          </GlassCard>
-          <GlassCard>
-            <div className="text-center">
-              <p className="text-2xl font-bold text-[#7C3AED]">{mockAdminData.stats.totalUsers.toLocaleString()}</p>
-              <p className="text-gray-400 text-sm">Total Users</p>
-            </div>
-          </GlassCard>
-        </div>
-      )}
 
       {/* Tabs */}
       <GlassCard>
         <div className="flex flex-wrap gap-2 mb-6">
-          {tabs.map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => setSelectedTab(tab.id)}
-              className={`px-4 py-2 rounded-lg transition-colors flex items-center gap-2 ${
-                selectedTab === tab.id
-                  ? 'bg-gradient-to-r from-[#49EACB] to-[#7C3AED] text-black'
-                  : 'text-gray-300 hover:text-white border border-gray-600'
-              }`}
-            >
-              {tab.id === 'create' && <Plus className="w-4 h-4" />}
-              {tab.label}
-              {tab.count !== null && (
-                <span className={`px-2 py-1 rounded-full text-xs ${
-                  selectedTab === tab.id ? 'bg-black/20' : 'bg-gray-700'
-                }`}>
-                  {tab.count}
-                </span>
-              )}
-            </button>
-          ))}
+          {tabs.map((tab) => {
+            const Icon = tab.icon;
+            return (
+              <button
+                key={tab.id}
+                onClick={() => setSelectedTab(tab.id)}
+                className={`px-4 py-2 rounded-lg transition-colors flex items-center gap-2 ${
+                  selectedTab === tab.id
+                    ? "bg-gradient-to-r from-[#49EACB] to-[#7C3AED] text-black"
+                    : "text-gray-300 hover:text-white border border-gray-600"
+                }`}
+              >
+                {Icon && <Icon className="w-4 h-4" />}
+                {tab.label}
+              </button>
+            );
+          })}
         </div>
 
-        {/* Overview Tab */}
-        {selectedTab === 'overview' && (
+        {/* Overview */}
+        {selectedTab === "overview" && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <GlassCard>
+              <div className="p-4">
+                <h3 className="text-lg font-semibold text-white mb-2">Quick Actions</h3>
+                <div className="text-sm text-gray-300 space-y-2">
+                  <p>• Use <b>Admin Create</b> to deploy markets without the public creation fee.</p>
+                  <p>• Use <b>Moderate</b> to remove or restore user-created listings.</p>
+                  <p>• Use <b>Oracle</b> to adjust fees, bonds, arbitrator, or pause the oracle.</p>
+                  <p>• Use <b>Resolution</b> to finalize questions or markets that are stuck.</p>
+                </div>
+              </div>
+            </GlassCard>
+            <GlassCard>
+              <div className="p-4">
+                <h3 className="text-lg font-semibold text-white mb-2">Addresses</h3>
+                <div className="text-xs text-gray-400 space-y-1">
+                  <div>Oracle: {String(DEFAULT_ORACLE)}</div>
+                  <div>Collateral: {String(DEFAULT_COLLATERAL)}</div>
+                  <div>Binary Factory: {String(FACTORIES?.binary || "-")}</div>
+                  <div>Categorical Factory: {String(FACTORIES?.categorical || "-")}</div>
+                  <div>Scalar Factory: {String(FACTORIES?.scalar || "-")}</div>
+                </div>
+              </div>
+            </GlassCard>
+          </div>
+        )}
+
+        {/* Admin Create */}
+        {selectedTab === "create" && (
           <div className="space-y-6">
-            <h3 className="text-xl font-semibold text-white">Platform Overview</h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="space-y-4">
-                <h4 className="text-lg font-medium text-[#49EACB]">Recent Activity</h4>
-                <div className="space-y-2">
-                  <div className="flex justify-between text-sm">
-                    <span className="text-gray-400">Markets created today</span>
-                    <span className="text-white">3</span>
-                  </div>
-                  <div className="flex justify-between text-sm">
-                    <span className="text-gray-400">Markets resolved today</span>
-                    <span className="text-white">1</span>
-                  </div>
-                  <div className="flex justify-between text-sm">
-                    <span className="text-gray-400">New users today</span>
-                    <span className="text-white">24</span>
-                  </div>
+            <h3 className="text-xl font-semibold text-white">Create New Market (Admin, no fee)</h3>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-center">
+              <label className="text-sm text-gray-300">Market Type</label>
+              <select
+                className="md:col-span-2 bg-black/30 border border-gray-600 rounded-lg px-3 py-2 text-white"
+                value={marketType}
+                onChange={(e) => setMarketType(e.target.value as any)}
+              >
+                <option value="binary">Binary (Yes/No)</option>
+                <option value="categorical">Categorical</option>
+                <option value="scalar">Scalar</option>
+              </select>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-center">
+              <label className="text-sm text-gray-300">Market Name</label>
+              <input
+                className="md:col-span-2 bg-black/30 border border-gray-600 rounded-lg px-3 py-2 text-white"
+                value={marketName}
+                onChange={(e) => setMarketName(e.target.value)}
+                placeholder="e.g., Will BTC close above $90k on Dec 31?"
+              />
+            </div>
+
+            {marketType === "categorical" && (
+              <>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-center">
+                  <label className="text-sm text-gray-300"># of Outcomes</label>
+                  <input
+                    type="number"
+                    min={2}
+                    className="md:col-span-2 bg-black/30 border border-gray-600 rounded-lg px-3 py-2 text-white"
+                    value={numOutcomes}
+                    onChange={(e) => setNumOutcomes(parseInt(e.target.value || "2", 10))}
+                  />
                 </div>
-              </div>
-              <div className="space-y-4">
-                <h4 className="text-lg font-medium text-[#7C3AED]">Pending Actions</h4>
-                <div className="space-y-2">
-                  <div className="flex justify-between text-sm">
-                    <span className="text-gray-400">Markets awaiting approval</span>
-                    <span className="text-yellow-400">{mockAdminData.pendingMarkets.length}</span>
-                  </div>
-                  <div className="flex justify-between text-sm">
-                    <span className="text-gray-400">Markets to resolve</span>
-                    <span className="text-red-400">{mockAdminData.marketsToResolve.length}</span>
-                  </div>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-center">
+                  <label className="text-sm text-gray-300">Outcome Names</label>
+                  <input
+                    className="md:col-span-2 bg-black/30 border border-gray-600 rounded-lg px-3 py-2 text-white"
+                    value={outcomeNames}
+                    onChange={(e) => setOutcomeNames(e.target.value)}
+                    placeholder="Yes,No OR A,B,C"
+                  />
                 </div>
+              </>
+            )}
+
+            {marketType === "scalar" && (
+              <>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-center">
+                  <label className="text-sm text-gray-300">Min</label>
+                  <input
+                    className="md:col-span-2 bg-black/30 border border-gray-600 rounded-lg px-3 py-2 text-white"
+                    value={scalarMin}
+                    onChange={(e) => setScalarMin(e.target.value)}
+                  />
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-center">
+                  <label className="text-sm text-gray-300">Max</label>
+                  <input
+                    className="md:col-span-2 bg-black/30 border border-gray-600 rounded-lg px-3 py-2 text-white"
+                    value={scalarMax}
+                    onChange={(e) => setScalarMax(e.target.value)}
+                  />
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-center">
+                  <label className="text-sm text-gray-300">Decimals</label>
+                  <input
+                    type="number"
+                    min={0}
+                    className="md:col-span-2 bg-black/30 border border-gray-600 rounded-lg px-3 py-2 text-white"
+                    value={scalarDecimals}
+                    onChange={(e) => setScalarDecimals(parseInt(e.target.value || "0", 10))}
+                  />
+                </div>
+              </>
+            )}
+
+            <button
+              onClick={handleAdminCreate}
+              disabled={creating}
+              className="w-full py-3 bg-gradient-to-r from-[#49EACB] to-[#7C3AED] text-black font-semibold rounded-lg hover:opacity-90 transition-opacity"
+            >
+              {creating ? "Creating…" : "Create Market (Admin)"}
+            </button>
+
+            {(lastQuestionId || lastMarketAddress) && (
+              <div className="text-xs text-gray-400 space-y-1">
+                {lastQuestionId && <div>QuestionId: {lastQuestionId}</div>}
+                {lastMarketAddress && <div>Market: {lastMarketAddress}</div>}
               </div>
+            )}
+          </div>
+        )}
+
+        {/* Moderate */}
+        {selectedTab === "moderate" && (
+          <div className="space-y-6">
+            <h3 className="text-xl font-semibold text-white">Moderate Listings</h3>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-center">
+              <label className="text-sm text-gray-300">Market Address</label>
+              <input
+                className="md:col-span-2 bg-black/30 border border-gray-600 rounded-lg px-3 py-2 text-white"
+                value={modMarket}
+                onChange={(e) => setModMarket(e.target.value)}
+                placeholder="0x..."
+              />
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-center">
+              <label className="text-sm text-gray-300">Reason (optional)</label>
+              <input
+                className="md:col-span-2 bg-black/30 border border-gray-600 rounded-lg px-3 py-2 text-white"
+                value={modReason}
+                onChange={(e) => setModReason(e.target.value)}
+                placeholder="Explicit content / spam / duplicate…"
+              />
+            </div>
+
+            <div className="flex gap-3">
+              <button
+                onClick={handleRemoveListing}
+                disabled={modBusy}
+                className="px-4 py-2 bg-red-500/20 text-red-400 border border-red-500/30 rounded-lg hover:bg-red-500/30 transition-colors"
+              >
+                Remove Listing
+              </button>
+              <button
+                onClick={handleRestoreListing}
+                disabled={modBusy}
+                className="px-4 py-2 bg-green-500/20 text-green-400 border border-green-500/30 rounded-lg hover:bg-green-500/30 transition-colors"
+              >
+                Restore Listing
+              </button>
             </div>
           </div>
         )}
 
-        {/* Pending Markets Tab */}
-        {selectedTab === 'pending' && (
-          <div className="space-y-4">
-            <h3 className="text-xl font-semibold text-white">Pending Market Approvals</h3>
-            {mockAdminData.pendingMarkets.map((market) => (
-              <div key={market.id} className="border border-gray-700 rounded-lg p-4">
-                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                  <div className="flex-1">
-                    <h4 className="font-semibold text-white mb-2">{market.title}</h4>
-                    <div className="flex items-center gap-4 text-sm text-gray-400">
-                      <span>Creator: {market.creator}</span>
-                      <span>Created: {market.created}</span>
-                      <span>Liquidity: {market.liquidity} KAS</span>
-                    </div>
-                  </div>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => handleApproveMarket(market.id)}
-                      className="flex items-center gap-2 px-4 py-2 bg-green-500/20 text-green-400 border border-green-500/30 rounded-lg hover:bg-green-500/30 transition-colors"
-                    >
-                      <CheckCircle className="w-4 h-4" />
-                      Approve
-                    </button>
-                    <button
-                      onClick={() => handleRejectMarket(market.id)}
-                      className="flex items-center gap-2 px-4 py-2 bg-red-500/20 text-red-400 border border-red-500/30 rounded-lg hover:bg-red-500/30 transition-colors"
-                    >
-                      <XCircle className="w-4 h-4" />
-                      Reject
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Markets to Resolve Tab */}
-        {selectedTab === 'resolve' && (
-          <div className="space-y-4">
-            <h3 className="text-xl font-semibold text-white">Markets to Resolve</h3>
-            {mockAdminData.marketsToResolve.map((market) => (
-              <div key={market.id} className="border border-gray-700 rounded-lg p-4">
-                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                  <div className="flex-1">
-                    <h4 className="font-semibold text-white mb-2">{market.title}</h4>
-                    <div className="flex items-center gap-4 text-sm text-gray-400">
-                      <span className="flex items-center">
-                        <Clock className="w-4 h-4 mr-1" />
-                        Ended: {market.endDate}
-                      </span>
-                      <span>Volume: ${market.volume.toLocaleString()}</span>
-                      <span>Participants: {market.participants}</span>
-                    </div>
-                  </div>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => handleResolveMarket(market.id, 'yes')}
-                      className="px-4 py-2 bg-green-500/20 text-green-400 border border-green-500/30 rounded-lg hover:bg-green-500/30 transition-colors"
-                    >
-                      Resolve YES
-                    </button>
-                    <button
-                      onClick={() => handleResolveMarket(market.id, 'no')}
-                      className="px-4 py-2 bg-red-500/20 text-red-400 border border-red-500/30 rounded-lg hover:bg-red-500/30 transition-colors"
-                    >
-                      Resolve NO
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Create Market Tab */}
-        {selectedTab === 'create' && (
+        {/* Oracle */}
+        {selectedTab === "oracle" && (
           <div className="space-y-6">
-            <h3 className="text-xl font-semibold text-white">Create New Market</h3>
-            <form onSubmit={handleCreateMarket} className="space-y-6">
-              <div>
-                <label className="block text-sm font-medium text-gray-300 mb-2">
-                  Market Question
-                </label>
-                <input
-                  type="text"
-                  value={formData.title}
-                  onChange={(e) => setFormData({ ...formData, title: e.target.value })}
-                  placeholder="Will Bitcoin reach $100,000 by end of 2024?"
-                  className="w-full px-4 py-3 bg-black/30 border border-gray-600 rounded-lg focus:border-[#49EACB] focus:outline-none text-white placeholder-gray-400"
-                  required
-                />
-              </div>
+            <h3 className="text-xl font-semibold text-white">Oracle Controls</h3>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-300 mb-2">
-                  Description
-                </label>
-                <textarea
-                  value={formData.description}
-                  onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                  placeholder="Provide additional context and resolution criteria..."
-                  rows={4}
-                  className="w-full px-4 py-3 bg-black/30 border border-gray-600 rounded-lg focus:border-[#49EACB] focus:outline-none text-white placeholder-gray-400"
-                  required
-                />
-              </div>
+            <button
+              onClick={refreshOracle}
+              className="px-3 py-2 border border-gray-600 rounded-lg text-sm text-gray-300 hover:text-white"
+            >
+              Refresh
+            </button>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-300 mb-2">
-                    Category
-                  </label>
-                  <select
-                    value={formData.category}
-                    onChange={(e) => setFormData({ ...formData, category: e.target.value })}
-                    className="w-full px-4 py-3 bg-black/30 border border-gray-600 rounded-lg focus:border-[#49EACB] focus:outline-none text-white"
-                    required
-                  >
-                    <option value="">Select category</option>
-                    <option value="crypto">Crypto</option>
-                    <option value="technology">Technology</option>
-                    <option value="space">Space</option>
-                    <option value="politics">Politics</option>
-                    <option value="sports">Sports</option>
-                  </select>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <GlassCard>
+                <div className="p-4 space-y-3 text-sm text-gray-300">
+                  <div><b>questionFee</b>: {oracleReads?.questionFee ?? "-"}</div>
+                  <div><b>feeBps</b>: {oracleReads?.feeBps ?? "-"}</div>
+                  <div><b>feeSink</b>: {oracleReads?.feeSink ?? "-"}</div>
+                  <div><b>bondToken</b>: {oracleReads?.bondToken ?? "-"}</div>
+                  <div><b>arbitrator</b>: {oracleReads?.arbitrator ?? "-"}</div>
+                  <div><b>minBaseBond</b>: {oracleReads?.minBaseBond ?? "-"}</div>
+                  <div><b>escalationBond</b>: {oracleReads?.escalationBond ?? "-"}</div>
+                  <div><b>paused</b>: {String(oracleReads?.paused) ?? "-"}</div>
                 </div>
+              </GlassCard>
 
-                <div>
-                  <label className="block text-sm font-medium text-gray-300 mb-2">
-                    <Calendar className="inline w-4 h-4 mr-1" />
-                    End Date
-                  </label>
-                  <input
-                    type="date"
-                    value={formData.endDate}
-                    onChange={(e) => setFormData({ ...formData, endDate: e.target.value })}
-                    className="w-full px-4 py-3 bg-black/30 border border-gray-600 rounded-lg focus:border-[#49EACB] focus:outline-none text-white"
-                    required
-                  />
-                </div>
-              </div>
+              <GlassCard>
+                <div className="p-4 space-y-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-center">
+                    <label className="text-sm text-gray-300">Set questionFee (uint)</label>
+                    <input
+                      className="bg-black/30 border border-gray-600 rounded-lg px-3 py-2 text-white"
+                      value={newQuestionFee}
+                      onChange={(e) => setNewQuestionFee(e.target.value)}
+                      placeholder="e.g., 100e18"
+                    />
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-center">
+                    <label className="text-sm text-gray-300">Set feeBps (uint)</label>
+                    <input
+                      className="bg-black/30 border border-gray-600 rounded-lg px-3 py-2 text-white"
+                      value={newFeeBps}
+                      onChange={(e) => setNewFeeBps(e.target.value)}
+                      placeholder="e.g., 50"
+                    />
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-center">
+                    <label className="text-sm text-gray-300">Set feeSink (address)</label>
+                    <input
+                      className="bg-black/30 border border-gray-600 rounded-lg px-3 py-2 text-white"
+                      value={newFeeSink}
+                      onChange={(e) => setNewFeeSink(e.target.value)}
+                      placeholder="0x..."
+                    />
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-center">
+                    <label className="text-sm text-gray-300">Set arbitrator (address)</label>
+                    <input
+                      className="bg-black/30 border border-gray-600 rounded-lg px-3 py-2 text-white"
+                      value={newArbitrator}
+                      onChange={(e) => setNewArbitrator(e.target.value)}
+                      placeholder="0x..."
+                    />
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-center">
+                    <label className="text-sm text-gray-300">Set minBaseBond (uint)</label>
+                    <input
+                      className="bg-black/30 border border-gray-600 rounded-lg px-3 py-2 text-white"
+                      value={newMinBaseBond}
+                      onChange={(e) => setNewMinBaseBond(e.target.value)}
+                      placeholder="e.g., 1e18"
+                    />
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-center">
+                    <label className="text-sm text-gray-300">Set escalationBond (uint)</label>
+                    <input
+                      className="bg-black/30 border border-gray-600 rounded-lg px-3 py-2 text-white"
+                      value={newEscalationBond}
+                      onChange={(e) => setNewEscalationBond(e.target.value)}
+                      placeholder="e.g., 10e18"
+                    />
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-center">
+                    <label className="text-sm text-gray-300">Set paused (bool)</label>
+                    <select
+                      className="bg-black/30 border border-gray-600 rounded-lg px-3 py-2 text-white"
+                      value={newPaused === null ? "" : String(newPaused)}
+                      onChange={(e) =>
+                        setNewPaused(e.target.value === "" ? null : e.target.value === "true")
+                      }
+                    >
+                      <option value="">--</option>
+                      <option value="true">true</option>
+                      <option value="false">false</option>
+                    </select>
+                  </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-300 mb-2">
-                    <DollarSign className="inline w-4 h-4 mr-1" />
-                    Initial Liquidity (KAS)
-                  </label>
-                  <input
-                    type="number"
-                    value={formData.initialLiquidity}
-                    onChange={(e) => setFormData({ ...formData, initialLiquidity: e.target.value })}
-                    placeholder="1000"
-                    min="100"
-                    className="w-full px-4 py-3 bg-black/30 border border-gray-600 rounded-lg focus:border-[#49EACB] focus:outline-none text-white placeholder-gray-400"
-                    required
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-300 mb-2">
-                    <Users className="inline w-4 h-4 mr-1" />
-                    Trading Fee (%)
-                  </label>
-                  <input
-                    type="number"
-                    value={formData.fee}
-                    onChange={(e) => setFormData({ ...formData, fee: e.target.value })}
-                    min="0"
-                    max="10"
-                    step="0.1"
-                    className="w-full px-4 py-3 bg-black/30 border border-gray-600 rounded-lg focus:border-[#49EACB] focus:outline-none text-white"
-                    required
-                  />
-                </div>
-              </div>
-
-              <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-4">
-                <div className="flex items-start">
-                  <Info className="w-5 h-5 text-blue-400 mr-2 mt-0.5 flex-shrink-0" />
-                  <div className="text-sm text-blue-300">
-                    <p className="font-medium mb-1">Market Creation Requirements:</p>
-                    <ul className="list-disc list-inside space-y-1 text-blue-200">
-                      <li>Minimum initial liquidity: 100 KAS</li>
-                      <li>Market must resolve within 2 years</li>
-                      <li>Clear resolution criteria required</li>
-                      <li>Admin markets are auto-approved</li>
-                    </ul>
+                  <div className="flex flex-wrap gap-3">
+                    <button
+                      onClick={async () => {
+                        try {
+                          await writeOracle("setQuestionFee", [BigInt(newQuestionFee || "0")]);
+                          toast({ title: "Updated", description: "questionFee set." });
+                        } catch (e: any) {
+                          toast({ title: "Failed", description: e?.shortMessage || e?.message || "Error" });
+                        }
+                      }}
+                      className="px-4 py-2 bg-white/10 border border-white/20 rounded-lg text-white hover:bg-white/15"
+                    >
+                      Save questionFee
+                    </button>
+                    <button
+                      onClick={async () => {
+                        try {
+                          await writeOracle("setFeeBps", [Number(newFeeBps || "0")]);
+                          toast({ title: "Updated", description: "feeBps set." });
+                        } catch (e: any) {
+                          toast({ title: "Failed", description: e?.shortMessage || e?.message || "Error" });
+                        }
+                      }}
+                      className="px-4 py-2 bg-white/10 border border-white/20 rounded-lg text-white hover:bg-white/15"
+                    >
+                      Save feeBps
+                    </button>
+                    <button
+                      onClick={async () => {
+                        try {
+                          await writeOracle("setFeeSink", [newFeeSink as Hex]);
+                          toast({ title: "Updated", description: "feeSink set." });
+                        } catch (e: any) {
+                          toast({ title: "Failed", description: e?.shortMessage || e?.message || "Error" });
+                        }
+                      }}
+                      className="px-4 py-2 bg-white/10 border border-white/20 rounded-lg text-white hover:bg-white/15"
+                    >
+                      Save feeSink
+                    </button>
+                    <button
+                      onClick={async () => {
+                        try {
+                          await writeOracle("setArbitrator", [newArbitrator as Hex]);
+                          toast({ title: "Updated", description: "arbitrator set." });
+                        } catch (e: any) {
+                          toast({ title: "Failed", description: e?.shortMessage || e?.message || "Error" });
+                        }
+                      }}
+                      className="px-4 py-2 bg-white/10 border border-white/20 rounded-lg text-white hover:bg-white/15"
+                    >
+                      Save arbitrator
+                    </button>
+                    <button
+                      onClick={async () => {
+                        try {
+                          await writeOracle("setMinBaseBond", [BigInt(newMinBaseBond || "0")]);
+                          toast({ title: "Updated", description: "minBaseBond set." });
+                        } catch (e: any) {
+                          toast({ title: "Failed", description: e?.shortMessage || e?.message || "Error" });
+                        }
+                      }}
+                      className="px-4 py-2 bg-white/10 border border-white/20 rounded-lg text-white hover:bg-white/15"
+                    >
+                      Save minBaseBond
+                    </button>
+                    <button
+                      onClick={async () => {
+                        try {
+                          await writeOracle("setEscalationBond", [BigInt(newEscalationBond || "0")]);
+                          toast({ title: "Updated", description: "escalationBond set." });
+                        } catch (e: any) {
+                          toast({ title: "Failed", description: e?.shortMessage || e?.message || "Error" });
+                        }
+                      }}
+                      className="px-4 py-2 bg-white/10 border border-white/20 rounded-lg text-white hover:bg-white/15"
+                    >
+                      Save escalationBond
+                    </button>
+                    <button
+                      onClick={async () => {
+                        try {
+                          if (newPaused === null) throw new Error("Choose true/false");
+                          await writeOracle("setPaused", [newPaused]);
+                          toast({ title: "Updated", description: "paused set." });
+                        } catch (e: any) {
+                          toast({ title: "Failed", description: e?.shortMessage || e?.message || "Error" });
+                        }
+                      }}
+                      className="px-4 py-2 bg-white/10 border border-white/20 rounded-lg text-white hover:bg-white/15"
+                    >
+                      Save paused
+                    </button>
                   </div>
                 </div>
-              </div>
+              </GlassCard>
+            </div>
+          </div>
+        )}
 
-              <button
-                type="submit"
-                className="w-full py-4 bg-gradient-to-r from-[#49EACB] to-[#7C3AED] text-black font-semibold rounded-lg hover:opacity-90 transition-opacity text-lg"
+        {/* Factories */}
+        {selectedTab === "factories" && (
+          <div className="space-y-6">
+            <h3 className="text-xl font-semibold text-white">Factories</h3>
+            <button
+              onClick={refreshFactories}
+              className="px-3 py-2 border border-gray-600 rounded-lg text-sm text-gray-300 hover:text-white"
+            >
+              Refresh
+            </button>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              {/* Binary */}
+              <GlassCard>
+                <div className="p-4 space-y-3">
+                  <h4 className="text-white font-semibold">Binary</h4>
+                  <div className="text-sm text-gray-300">Address: {String(FACTORIES?.binary || "-")}</div>
+                  <div className="text-sm text-gray-300">Markets: {factoryReads?.binary?.count ?? "-"}</div>
+                  <div className="text-sm text-gray-300">Redeem Fee (bps): {factoryReads?.binary?.redeemFeeBps ?? "-"}</div>
+                  <div className="mt-2">
+                    <input
+                      className="w-full bg-black/30 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm"
+                      placeholder="New redeem fee bps"
+                      value={binaryRedeemFee}
+                      onChange={(e) => setBinaryRedeemFee(e.target.value)}
+                    />
+                  </div>
+                  <button
+                    onClick={() => setFactoryFee("binary")}
+                    className="mt-2 px-3 py-2 bg-white/10 border border-white/20 rounded-lg text-white hover:bg-white/15 text-sm"
+                  >
+                    Save
+                  </button>
+                </div>
+              </GlassCard>
+
+              {/* Categorical */}
+              <GlassCard>
+                <div className="p-4 space-y-3">
+                  <h4 className="text-white font-semibold">Categorical</h4>
+                  <div className="text-sm text-gray-300">Address: {String(FACTORIES?.categorical || "-")}</div>
+                  <div className="text-sm text-gray-300">Markets: {factoryReads?.categorical?.count ?? "-"}</div>
+                  <div className="text-sm text-gray-300">Redeem Fee (bps): {factoryReads?.categorical?.redeemFeeBps ?? "-"}</div>
+                  <div className="mt-2">
+                    <input
+                      className="w-full bg-black/30 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm"
+                      placeholder="New redeem fee bps"
+                      value={categoricalRedeemFee}
+                      onChange={(e) => setCategoricalRedeemFee(e.target.value)}
+                    />
+                  </div>
+                  <button
+                    onClick={() => setFactoryFee("categorical")}
+                    className="mt-2 px-3 py-2 bg-white/10 border border-white/20 rounded-lg text-white hover:bg-white/15 text-sm"
+                  >
+                    Save
+                  </button>
+                </div>
+              </GlassCard>
+
+              {/* Scalar */}
+              <GlassCard>
+                <div className="p-4 space-y-3">
+                  <h4 className="text-white font-semibold">Scalar</h4>
+                  <div className="text-sm text-gray-300">Address: {String(FACTORIES?.scalar || "-")}</div>
+                  <div className="text-sm text-gray-300">Markets: {factoryReads?.scalar?.count ?? "-"}</div>
+                  <div className="text-sm text-gray-300">Redeem Fee (bps): {factoryReads?.scalar?.redeemFeeBps ?? "-"}</div>
+                  <div className="mt-2">
+                    <input
+                      className="w-full bg-black/30 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm"
+                      placeholder="New redeem fee bps"
+                      value={scalarRedeemFee}
+                      onChange={(e) => setScalarRedeemFee(e.target.value)}
+                    />
+                  </div>
+                  <button
+                    onClick={() => setFactoryFee("scalar")}
+                    className="mt-2 px-3 py-2 bg-white/10 border border-white/20 rounded-lg text-white hover:bg-white/15 text-sm"
+                  >
+                    Save
+                  </button>
+                </div>
+              </GlassCard>
+            </div>
+          </div>
+        )}
+
+        {/* Resolution */}
+        {selectedTab === "resolution" && (
+          <div className="space-y-6">
+            <h3 className="text-xl font-semibold text-white">Resolution & Finalization</h3>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-center">
+              <label className="text-sm text-gray-300">Finalize Question (bytes32 id)</label>
+              <input
+                className="md:col-span-2 bg-black/30 border border-gray-600 rounded-lg px-3 py-2 text-white"
+                value={finalizeQuestionId}
+                onChange={(e) => setFinalizeQuestionId(e.target.value)}
+                placeholder="0x... 32 bytes"
+              />
+            </div>
+            <button
+              onClick={doFinalizeQuestion}
+              disabled={resBusy}
+              className="px-4 py-2 bg-white/10 border border-white/20 rounded-lg text-white hover:bg-white/15"
+            >
+              Finalize Question
+            </button>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-center mt-4">
+              <label className="text-sm text-gray-300">Finalize Market (address)</label>
+              <input
+                className="md:col-span-2 bg-black/30 border border-gray-600 rounded-lg px-3 py-2 text-white"
+                value={finalizeMarketAddr}
+                onChange={(e) => setFinalizeMarketAddr(e.target.value)}
+                placeholder="0x..."
+              />
+            </div>
+            <button
+              onClick={doFinalizeMarket}
+              disabled={resBusy}
+              className="px-4 py-2 bg-white/10 border border-white/20 rounded-lg text-white hover:bg-white/15"
+            >
+              Finalize Market From Oracle
+            </button>
+          </div>
+        )}
+
+        {/* Arbitration */}
+        {selectedTab === "arbitration" && (
+          <div className="space-y-6">
+            <h3 className="text-xl font-semibold text-white">Arbitration (Danger Zone)</h3>
+
+            <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4 text-sm text-red-300">
+              Only use if the normal dispute flow failed. This submits an admin ruling on the arbitrator contract.
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-center">
+              <label className="text-sm text-gray-300">Arbitrator Address</label>
+              <input
+                className="md:col-span-2 bg-black/30 border border-gray-600 rounded-lg px-3 py-2 text-white"
+                value={arbAddr}
+                onChange={(e) => setArbAddr(e.target.value)}
+                placeholder="0x..."
+              />
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-center">
+              <label className="text-sm text-gray-300">QuestionId (bytes32)</label>
+              <input
+                className="md:col-span-2 bg-black/30 border border-gray-600 rounded-lg px-3 py-2 text-white"
+                value={arbQuestionId}
+                onChange={(e) => setArbQuestionId(e.target.value)}
+                placeholder="0x... 32 bytes"
+              />
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-center">
+              <label className="text-sm text-gray-300">Outcome Type</label>
+              <select
+                className="md:col-span-2 bg-black/30 border border-gray-600 rounded-lg px-3 py-2 text-white"
+                value={arbType}
+                onChange={(e) => setArbType(e.target.value as any)}
               >
-                Create Market (Admin)
-              </button>
-            </form>
+                <option value="binary">Binary</option>
+                <option value="categorical">Categorical</option>
+                <option value="scalar">Scalar</option>
+              </select>
+            </div>
+
+            {arbType === "binary" && (
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-center">
+                <label className="text-sm text-gray-300">Binary Outcome</label>
+                <select
+                  className="md:col-span-2 bg-black/30 border border-gray-600 rounded-lg px-3 py-2 text-white"
+                  value={arbBinaryValue}
+                  onChange={(e) => setArbBinaryValue(e.target.value as any)}
+                >
+                  <option value="yes">YES</option>
+                  <option value="no">NO</option>
+                </select>
+              </div>
+            )}
+
+            {arbType === "categorical" && (
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-center">
+                <label className="text-sm text-gray-300">Winner Index (uint)</label>
+                <input
+                  type="number"
+                  className="md:col-span-2 bg-black/30 border border-gray-600 rounded-lg px-3 py-2 text-white"
+                  value={arbCategoricalIndex}
+                  onChange={(e) => setArbCategoricalIndex(parseInt(e.target.value || "0", 10))}
+                />
+              </div>
+            )}
+
+            {arbType === "scalar" && (
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-center">
+                <label className="text-sm text-gray-300">Scalar Value (int)</label>
+                <input
+                  className="md:col-span-2 bg-black/30 border border-gray-600 rounded-lg px-3 py-2 text-white"
+                  value={arbScalarValue}
+                  onChange={(e) => setArbScalarValue(e.target.value)}
+                />
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-center">
+              <label className="text-sm text-gray-300">Payee (address)</label>
+              <input
+                className="md:col-span-2 bg-black/30 border border-gray-600 rounded-lg px-3 py-2 text-white"
+                value={arbPayee}
+                onChange={(e) => setArbPayee(e.target.value)}
+                placeholder="0x... (who receives fees if any)"
+              />
+            </div>
+
+            <button
+              onClick={doAdminRule}
+              disabled={arbBusy}
+              className="px-4 py-2 bg-red-500/20 text-red-200 border border-red-500/30 rounded-lg hover:bg-red-500/30"
+            >
+              Submit Admin Ruling
+            </button>
           </div>
         )}
       </GlassCard>
